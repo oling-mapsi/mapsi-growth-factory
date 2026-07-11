@@ -1,0 +1,17 @@
+# Project-local Codex notes
+#
+# This file is intentionally conservative.
+# The optional GitHub MCP server for read-only cross-repository inspection
+# should only be enabled once the official server binary and read-only token
+# are available on the workstation.
+#
+# Example shape to activate later:
+#
+# [mcp_servers.github_readonly]
+# command = "/absolute/path/to/github-mcp-server"
+# args = ["stdio"]
+# enabled = true
+#
+# [mcp_servers.github_readonly.env]
+# GITHUB_TOKEN = "read-only-token"
+# GITHUB_READ_ONLY = "true"

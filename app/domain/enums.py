@@ -1,0 +1,17 @@
+from enum import Enum
+
+
+class CampaignStatus(str, Enum):
+    DRAFT = "DRAFT"
+    GENERATED = "GENERATED"
+    CHANGES_REQUESTED = "CHANGES_REQUESTED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    PUBLISHED = "PUBLISHED"
+
+
+class AssetStatus(str, Enum):
+    DRAFT = "DRAFT"
+    READY_FOR_REVIEW = "READY_FOR_REVIEW"
+    CHANGES_REQUESTED = "CHANGES_REQUESTED"
+    APPROVED = "APPROVED"

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "label", "enabled", "legal_basis", "conditions", "exclusions"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]+$"
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string"
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "legal_basis": {
+      "type": "string"
+    },
+    "conditions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "all": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/condition" }
+        },
+        "any": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/condition" }
+        }
+      }
+    },
+    "exclusions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["opted_out", "invalid_email", "account_suspended"]
+      }
+    }
+  },
+  "$defs": {
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "operator", "value"],
+      "properties": {
+        "field": {
+          "type": "string",
+          "pattern": "^(active|communication_eligible|opted_out|role_key|instance_key|client_key|module_keys|last_login_days|account_age_days|total_feature_events_7d|module_events\\.[a-z0-9_-]+)$"
+        },
+        "operator": {
+          "type": "string",
+          "enum": ["equals", "greater_than", "greater_or_equal", "less_than", "less_or_equal", "in", "contains_any"]
+        },
+        "value": {}
+      }
+    }
+  }
+}

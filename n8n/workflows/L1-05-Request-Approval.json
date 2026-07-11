@@ -1,0 +1,95 @@
+{
+  "name": "L1-05-Request-Approval",
+  "active": false,
+  "settings": { "executionOrder": "v1", "timezone": "Europe/Paris" },
+  "nodes": [
+    {
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [200, 180],
+      "parameters": {}
+    },
+    {
+      "id": "set-context",
+      "name": "Set Context",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [450, 180],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            { "name": "correlation_id", "value": "={{ $now.toISO() + '-l1-05' }}", "type": "string" },
+            { "name": "campaign_id", "value": "={{ $env.N8N_CAMPAIGN_ID || 'campaign-placeholder' }}", "type": "string" },
+            { "name": "idempotency_key", "value": "={{ 'l1-05:' + $json.correlation_id + ':' + $json.campaign_id }}", "type": "string" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "approval-http",
+      "name": "Request Approval",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 180],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_GROWTH_BASE_URL + '/ops/campaigns/' + $json.campaign_id + '/request-approval' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-API-Key", "value": "={{ $env.N8N_GROWTH_API_KEY }}" },
+            { "name": "Idempotency-Key", "value": "={{ $json.idempotency_key }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { correlation_id: $json.correlation_id, dry_run: false, proposed_at: $now.plus({ days: 1 }).toISO() } }}",
+        "options": { "timeout": 30000 }
+      }
+    },
+    {
+      "id": "wait-approval",
+      "name": "Wait For Resume Webhook",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1050, 180],
+      "parameters": {
+        "resume": "webhook",
+        "httpMethod": "POST",
+        "responseMode": "lastNode"
+      }
+    },
+    {
+      "id": "status-http",
+      "name": "Read Review Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1330, 180],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.N8N_GROWTH_BASE_URL + '/ops/campaigns/' + $json.campaign_id + '/review-status?correlation_id=' + $json.correlation_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-API-Key", "value": "={{ $env.N8N_GROWTH_API_KEY }}" }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": { "main": [[{ "node": "Set Context", "type": "main", "index": 0 }]] },
+    "Set Context": { "main": [[{ "node": "Request Approval", "type": "main", "index": 0 }]] },
+    "Request Approval": { "main": [[{ "node": "Wait For Resume Webhook", "type": "main", "index": 0 }]] },
+    "Wait For Resume Webhook": { "main": [[{ "node": "Read Review Status", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "tags": ["lot-1", "growth", "human-approval", "sandbox"]
+}

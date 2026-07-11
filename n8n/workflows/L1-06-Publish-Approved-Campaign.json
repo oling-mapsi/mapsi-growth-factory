@@ -1,0 +1,126 @@
+{
+  "name": "L1-06-Publish-Approved-Campaign",
+  "active": false,
+  "settings": { "executionOrder": "v1", "timezone": "Europe/Paris" },
+  "nodes": [
+    {
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [200, 240],
+      "parameters": {}
+    },
+    {
+      "id": "set-context",
+      "name": "Set Context",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [450, 240],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            { "name": "correlation_id", "value": "={{ $now.toISO() + '-l1-06' }}", "type": "string" },
+            { "name": "campaign_id", "value": "={{ $env.N8N_CAMPAIGN_ID || 'campaign-placeholder' }}", "type": "string" },
+            { "name": "scheduled_at", "value": "={{ $now.plus({ days: 1 }).toISO() }}", "type": "string" },
+            { "name": "idempotency_key", "value": "={{ 'l1-06:' + $json.correlation_id + ':' + $json.campaign_id }}", "type": "string" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "readiness-http",
+      "name": "Check Publication Readiness",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 240],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.N8N_GROWTH_BASE_URL + '/ops/campaigns/' + $json.campaign_id + '/publication-readiness?correlation_id=' + $json.correlation_id + '&scheduled_at=' + encodeURIComponent($json.scheduled_at) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "X-API-Key", "value": "={{ $env.N8N_GROWTH_API_KEY }}" }]
+        },
+        "options": { "timeout": 15000 }
+      }
+    },
+    {
+      "id": "if-ready",
+      "name": "Publishable?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1040, 240],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.details.publishable }}",
+              "operation": "isTrue"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "publish-http",
+      "name": "Publish Approved Campaign",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1310, 140],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_GROWTH_BASE_URL + '/ops/campaigns/' + $('Set Context').item.json.campaign_id + '/publish-approved' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-API-Key", "value": "={{ $env.N8N_GROWTH_API_KEY }}" },
+            { "name": "Idempotency-Key", "value": "={{ $('Set Context').item.json.idempotency_key }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { correlation_id: $('Set Context').item.json.correlation_id, scheduled_at: $('Set Context').item.json.scheduled_at, channels: ['linkedin','oling'] } }}",
+        "options": { "timeout": 30000 }
+      }
+    },
+    {
+      "id": "failure-http",
+      "name": "Notify Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1310, 340],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_GROWTH_BASE_URL + '/ops/failure-notifications' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-API-Key", "value": "={{ $env.N8N_GROWTH_API_KEY }}" },
+            { "name": "Idempotency-Key", "value": "={{ $('Set Context').item.json.idempotency_key + ':failure' }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { correlation_id: $('Set Context').item.json.correlation_id, workflow: 'L1-06-Publish-Approved-Campaign', step: 'publication-readiness', error: 'publishable=false', retryable: true } }}",
+        "options": { "timeout": 15000 }
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": { "main": [[{ "node": "Set Context", "type": "main", "index": 0 }]] },
+    "Set Context": { "main": [[{ "node": "Check Publication Readiness", "type": "main", "index": 0 }]] },
+    "Check Publication Readiness": { "main": [[{ "node": "Publishable?", "type": "main", "index": 0 }]] },
+    "Publishable?": {
+      "main": [
+        [{ "node": "Publish Approved Campaign", "type": "main", "index": 0 }],
+        [{ "node": "Notify Failure", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "pinData": {},
+  "tags": ["lot-1", "growth", "human-approval", "sandbox"]
+}

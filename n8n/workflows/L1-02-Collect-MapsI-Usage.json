@@ -1,0 +1,63 @@
+{
+  "name": "L1-02-Collect-MapsI-Usage",
+  "active": false,
+  "settings": { "executionOrder": "v1", "timezone": "Europe/Paris" },
+  "nodes": [
+    {
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [200, 180],
+      "parameters": {}
+    },
+    {
+      "id": "set-context",
+      "name": "Set Context",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [450, 180],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            { "name": "correlation_id", "value": "={{ $now.toISO() + '-l1-02' }}", "type": "string" },
+            { "name": "idempotency_key", "value": "={{ 'l1-02:' + $json.correlation_id }}", "type": "string" },
+            { "name": "instance_id", "value": "={{ $env.N8N_MAPSI_INSTANCE_ID || '' }}", "type": "string" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "collect-http",
+      "name": "Collect MAPSI Usage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 180],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 10000,
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_GROWTH_BASE_URL + '/ops/collect-mapsi-usage' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-API-Key", "value": "={{ $env.N8N_GROWTH_API_KEY }}" },
+            { "name": "Idempotency-Key", "value": "={{ $json.idempotency_key }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { correlation_id: $json.correlation_id, dry_run: false, instance_id: $json.instance_id || null } }}",
+        "options": { "timeout": 60000 }
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": { "main": [[{ "node": "Set Context", "type": "main", "index": 0 }]] },
+    "Set Context": { "main": [[{ "node": "Collect MAPSI Usage", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "tags": ["lot-1", "growth", "sandbox"]
+}

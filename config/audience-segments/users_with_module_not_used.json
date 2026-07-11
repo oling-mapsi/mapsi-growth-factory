@@ -1,0 +1,15 @@
+{
+  "id": "users_with_module_not_used",
+  "label": "Utilisateurs avec module non utilise",
+  "description": "Utilisateurs actifs eligibles avec presence du module planning mais zero activite recente.",
+  "enabled": true,
+  "legal_basis": "legitimate_interest_adoption",
+  "conditions": {
+    "all": [
+      { "field": "active", "operator": "equals", "value": true },
+      { "field": "communication_eligible", "operator": "equals", "value": true },
+      { "field": "module_events.planning", "operator": "equals", "value": 0 }
+    ]
+  },
+  "exclusions": ["opted_out", "invalid_email", "account_suspended"]
+}

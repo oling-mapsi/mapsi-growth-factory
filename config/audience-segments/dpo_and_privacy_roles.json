@@ -1,0 +1,15 @@
+{
+  "id": "dpo_and_privacy_roles",
+  "label": "DPO et roles privacy",
+  "description": "Profils DPO et protection des donnees.",
+  "enabled": true,
+  "legal_basis": "legitimate_interest_compliance_updates",
+  "conditions": {
+    "all": [
+      { "field": "active", "operator": "equals", "value": true },
+      { "field": "communication_eligible", "operator": "equals", "value": true },
+      { "field": "role_key", "operator": "in", "value": ["dpo", "privacy_officer", "privacy_manager"] }
+    ]
+  },
+  "exclusions": ["opted_out", "invalid_email", "account_suspended"]
+}

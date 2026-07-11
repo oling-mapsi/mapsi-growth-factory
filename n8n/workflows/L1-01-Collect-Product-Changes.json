@@ -1,0 +1,107 @@
+{
+  "name": "L1-01-Collect-Product-Changes",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Paris"
+  },
+  "nodes": [
+    {
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [200, 220],
+      "parameters": {}
+    },
+    {
+      "id": "schedule-trigger",
+      "name": "Weekly Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [200, 60],
+      "parameters": {
+        "timezone": "Europe/Paris",
+        "rule": {
+          "interval": [
+            {
+              "triggerAtDay": [1],
+              "triggerAtHour": 7,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "set-context",
+      "name": "Set Context",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [460, 140],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "correlation_id",
+              "value": "={{ $now.toISO() + '-l1-01' }}",
+              "type": "string"
+            },
+            {
+              "name": "idempotency_key",
+              "value": "={{ 'l1-01:' + $json.correlation_id }}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "collect-http",
+      "name": "Collect Product Changes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 140],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_GROWTH_BASE_URL + '/ops/collect-product-changes' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.N8N_GROWTH_API_KEY }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $json.idempotency_key }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { correlation_id: $json.correlation_id, dry_run: false } }}",
+        "options": {
+          "timeout": 30000
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [[{ "node": "Set Context", "type": "main", "index": 0 }]]
+    },
+    "Weekly Schedule": {
+      "main": [[{ "node": "Set Context", "type": "main", "index": 0 }]]
+    },
+    "Set Context": {
+      "main": [[{ "node": "Collect Product Changes", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "tags": ["lot-1", "growth", "sandbox"]
+}

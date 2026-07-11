@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ContactSnapshotPage",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["instance_id", "contract_version", "generated_at", "contacts", "has_more"],
+  "properties": {
+    "instance_id": {"type": "string"},
+    "contract_version": {"type": "string"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "cursor": {"type": "string"},
+    "next_cursor": {"type": "string"},
+    "has_more": {"type": "boolean"},
+    "contacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["user_id", "tenant_id", "email", "communication_eligible", "active"],
+        "properties": {
+          "user_id": {"type": "string"},
+          "tenant_id": {"type": "string"},
+          "email": {"type": "string", "format": "email"},
+          "communication_eligible": {"type": "boolean"},
+          "active": {"type": "boolean"},
+          "opted_out": {"type": "boolean"},
+          "role_key": {"type": "string"},
+          "opt_out_reason": {"type": "string"}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "name": "L1-08-Failure-Notification",
+  "active": false,
+  "settings": { "executionOrder": "v1", "timezone": "Europe/Paris" },
+  "nodes": [
+    {
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [200, 180],
+      "parameters": {}
+    },
+    {
+      "id": "set-context",
+      "name": "Set Context",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [450, 180],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            { "name": "correlation_id", "value": "={{ $now.toISO() + '-l1-08' }}", "type": "string" },
+            { "name": "idempotency_key", "value": "={{ 'l1-08:' + $json.correlation_id }}", "type": "string" },
+            { "name": "workflow", "value": "L1-XX", "type": "string" },
+            { "name": "step", "value": "manual-test", "type": "string" },
+            { "name": "error", "value": "synthetic failure for sandbox validation", "type": "string" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "notify-http",
+      "name": "Notify Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 180],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_GROWTH_BASE_URL + '/ops/failure-notifications' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-API-Key", "value": "={{ $env.N8N_GROWTH_API_KEY }}" },
+            { "name": "Idempotency-Key", "value": "={{ $json.idempotency_key }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { correlation_id: $json.correlation_id, workflow: $json.workflow, step: $json.step, error: $json.error, retryable: true, dry_run: false } }}",
+        "options": { "timeout": 15000 }
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": { "main": [[{ "node": "Set Context", "type": "main", "index": 0 }]] },
+    "Set Context": { "main": [[{ "node": "Notify Failure", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "tags": ["lot-1", "growth", "sandbox"]
+}
