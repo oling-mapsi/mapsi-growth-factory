@@ -38,7 +38,16 @@ def upgrade() -> None:
     op.execute("UPDATE content_assets SET content_html = body WHERE content_html = ''")
     op.execute("UPDATE content_assets SET content_text = body WHERE content_text = ''")
     op.execute("UPDATE content_assets SET subject = title WHERE subject = '' AND channel = 'mautic'")
-    op.execute("UPDATE content_assets SET source_evidence_ids = evidence_ids WHERE source_evidence_ids = '[]'")
+    if op.get_bind().dialect.name == "postgresql":
+        op.execute(
+            """
+            UPDATE content_assets
+            SET source_evidence_ids = evidence_ids
+            WHERE CAST(source_evidence_ids AS TEXT) = '[]'
+            """
+        )
+    else:
+        op.execute("UPDATE content_assets SET source_evidence_ids = evidence_ids WHERE source_evidence_ids = '[]'")
     op.execute("UPDATE content_assets SET content_version = revision WHERE content_version = 1")
     op.execute(
         """
