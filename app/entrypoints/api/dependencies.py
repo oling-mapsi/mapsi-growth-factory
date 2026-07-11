@@ -18,6 +18,7 @@ from app.application.services.editorial_agents import (
     WebsiteArticleWriterAgent,
 )
 from app.application.services.github_intelligence_service import GitHubIntelligenceService
+from app.application.services.mapsi_product_changes_service import MapsiProductChangesService
 from app.application.services.mapsi_usage_collection_service import MapsiUsageCollectionService
 from app.application.services.mautic_contact_sync_service import MauticContactSyncService
 from app.application.services.multichannel_content_service import MultichannelContentService
@@ -48,6 +49,7 @@ from app.infrastructure.connectors.github import GitHubConnector
 from app.infrastructure.connectors.linkedin import LinkedInConnector, build_linkedin_config
 from app.infrastructure.connectors.mautic import MauticConnector, build_mautic_config
 from app.infrastructure.connectors.mapsi_usage import MapsiInstanceConfig, MapsiUsageConnector
+from app.generated.mapsi_contract_client import MapsiContractClient
 from app.infrastructure.repositories.audit import SqlAlchemyAuditLogRepository
 from app.infrastructure.repositories.audience_segments import AudienceSegmentationRepository
 from app.infrastructure.repositories.campaigns import SqlAlchemyCampaignRepository
@@ -109,6 +111,26 @@ def get_github_intelligence_service(session: Session = Depends(get_db_session)) 
         source_evidences=SqlAlchemySourceEvidenceRepository(session),
         webhook_deliveries=SqlAlchemyWebhookDeliveryRepository(session),
         task_queue=task_queue,
+    )
+
+
+def get_mapsi_product_changes_service(session: Session = Depends(get_db_session)) -> MapsiProductChangesService:
+    settings = get_settings()
+    if not settings.mapsi_growth_base_url:
+        raise RuntimeError("MAPSI_GROWTH_BASE_URL is not configured.")
+    if not settings.mapsi_growth_bearer_token:
+        raise RuntimeError("MAPSI_GROWTH_BEARER_TOKEN is not configured.")
+    connector = MapsiContractClient(
+        settings.mapsi_growth_base_url,
+        headers={"Authorization": f"Bearer {settings.mapsi_growth_bearer_token}"},
+    )
+    return MapsiProductChangesService(
+        connector=connector,
+        repository_sources=SqlAlchemyRepositorySourceRepository(session),
+        product_changes=SqlAlchemyProductChangeRepository(session),
+        source_evidences=SqlAlchemySourceEvidenceRepository(session),
+        repository_full_name=settings.mapsi_growth_repository_full_name,
+        default_branch=settings.mapsi_growth_default_branch,
     )
 
 

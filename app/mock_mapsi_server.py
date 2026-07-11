@@ -72,5 +72,6 @@ def contact_snapshot(cursor: str | None = Query(default=None), page_size: int = 
 
 
 @app.get("/internal/growth/product-changes")
+@app.get("/api/internal/growth/v1/product-changes")
 def product_changes() -> dict:
     return _load_json("examples/product-change.example.json")

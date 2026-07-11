@@ -42,6 +42,6 @@ class MapsiContractClient:
         return ContactSnapshotPage.model_validate(response.json())
 
     def get_product_changes(self) -> ProductChangeCollection:
-        response = self.client.get("/internal/growth/product-changes")
+        response = self.client.get("/api/internal/growth/v1/product-changes")
         response.raise_for_status()
         return ProductChangeCollection.model_validate(response.json())

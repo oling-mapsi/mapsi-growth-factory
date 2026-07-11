@@ -13,6 +13,8 @@ os.environ["REDIS_URL"] = "redis://localhost:6379/15"
 os.environ["REDIS_QUEUE_NAME"] = "mapsi:test:tasks"
 os.environ["GITHUB_WEBHOOK_SECRET"] = "test-github-secret"
 os.environ["GITHUB_ALLOWED_REPOSITORIES"] = "mapsi/mapsi-v6"
+os.environ["MAPSI_GROWTH_BASE_URL"] = "https://mapsi-v6.example.test"
+os.environ["MAPSI_GROWTH_BEARER_TOKEN"] = "test-growth-bearer"
 
 from app.core.db import Base
 from app.infrastructure.db import models  # noqa: F401
@@ -23,6 +25,7 @@ from app.entrypoints.api.dependencies import get_linkedin_metrics_collector
 from app.entrypoints.api.dependencies import get_linkedin_oauth_service
 from app.entrypoints.api.dependencies import get_linkedin_organization_resolver
 from app.entrypoints.api.dependencies import get_linkedin_post_publisher
+from app.entrypoints.api.dependencies import get_mapsi_product_changes_service
 from app.entrypoints.api.dependencies import get_adoption_measurement_service
 from app.entrypoints.api.dependencies import get_review_portal_service
 from app.application.services.adoption_measurement_service import AdoptionMeasurementService
@@ -32,6 +35,7 @@ from app.application.services.linkedin_metrics_collector import LinkedInMetricsC
 from app.application.services.linkedin_oauth_service import LinkedInOAuthService
 from app.application.services.linkedin_organization_resolver import LinkedInOrganizationResolver
 from app.application.services.linkedin_post_publisher import LinkedInPostPublisher
+from app.application.services.mapsi_product_changes_service import MapsiProductChangesService
 from app.entrypoints.api.routes.campaigns import get_idempotency_store
 from app.application.services.github_intelligence_service import GitHubIntelligenceService
 from app.application.services.review_portal_service import ReviewPortalService
@@ -145,6 +149,36 @@ def client(session: Session) -> Generator[TestClient, None, None]:
             task_queue=queue,
         )
 
+    class FakeMapsiProductChangesConnector:
+        def get_product_changes(self):
+            from app.generated.mapsi_contract_models import ProductChange, ProductChangeCollection
+
+            return ProductChangeCollection(
+                contract_version="1.0.0",
+                generated_at="2026-07-11T15:00:00+00:00",
+                items=[
+                    ProductChange(
+                        id="MAPSI-2026-010",
+                        title="Export des indicateurs du tableau utilisateur",
+                        summary="Les responsables peuvent exporter les indicateurs visibles depuis le tableau utilisateur sans retraitement manuel.",
+                        url="https://github.com/oling-mapsi/mapsi-v6/pull/2101",
+                        published_at="2026-07-01T00:00:00Z",
+                        tags=["product", "release", "dashboard"],
+                        communicable=True,
+                    )
+                ],
+            )
+
+    def override_mapsi_product_changes_service() -> MapsiProductChangesService:
+        return MapsiProductChangesService(
+            connector=FakeMapsiProductChangesConnector(),
+            repository_sources=SqlAlchemyRepositorySourceRepository(session),
+            product_changes=SqlAlchemyProductChangeRepository(session),
+            source_evidences=SqlAlchemySourceEvidenceRepository(session),
+            repository_full_name="oling-mapsi/mapsi-v6",
+            default_branch="master",
+        )
+
     def override_review_portal_service() -> ReviewPortalService:
         repository = SqlAlchemyCampaignRepository(session)
         audit_log = SqlAlchemyAuditLogRepository(session)
@@ -244,6 +278,7 @@ def client(session: Session) -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_campaign_service] = override_service
     app.dependency_overrides[get_idempotency_store] = override_idempotency_store
     app.dependency_overrides[get_github_intelligence_service] = override_github_service
+    app.dependency_overrides[get_mapsi_product_changes_service] = override_mapsi_product_changes_service
     app.dependency_overrides[get_review_portal_service] = override_review_portal_service
     app.dependency_overrides[get_campaign_publisher_service] = override_campaign_publisher_service
     app.dependency_overrides[get_adoption_measurement_service] = override_adoption_measurement_service

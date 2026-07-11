@@ -70,13 +70,16 @@ class ContactSnapshotPage(BaseModel):
 
 
 class ProductChange(BaseModel):
-    change_id: str
-    version: str
-    deployed_at: str
-    capability_key: str
+    id: str
+    title: str
     summary: str
-    audience_hint: str | None = None
+    url: str | None = None
+    published_at: str | None = None
+    tags: list[str]
+    communicable: bool
 
 
 class ProductChangeCollection(BaseModel):
-    changes: list[ProductChange]
+    contract_version: str
+    generated_at: str
+    items: list[ProductChange]

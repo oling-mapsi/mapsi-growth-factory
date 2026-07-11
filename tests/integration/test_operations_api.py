@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 from app.core.config import get_settings
+from app.infrastructure.db.models import ProductChangeModel, SourceEvidenceModel
 from app.domain.errors import EditorialGenerationBlockedError
 from app.entrypoints.api.dependencies import get_weekly_campaign_generation_service
 
@@ -112,3 +113,16 @@ def test_generate_weekly_campaign_returns_conflict_when_no_product_changes(clien
 
     assert response.status_code == 409
     assert response.json()["detail"] == "No communicable product changes available."
+
+
+def test_collect_product_changes_imports_mapsi_v6_contract(client, session) -> None:
+    response = client.post(
+        "/ops/collect-product-changes",
+        headers={**auth_headers(), "Idempotency-Key": "ops-product-changes-1"},
+        json={"correlation_id": "corr-product-changes-1", "dry_run": False},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["details"]["product_changes_collected"] == 1
+    assert session.query(ProductChangeModel).count() == 1
+    assert session.query(SourceEvidenceModel).count() == 1
