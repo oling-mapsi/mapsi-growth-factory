@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import re
 import json
 from typing import Any
 from uuid import uuid4
@@ -18,15 +19,44 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def build_content_hash(asset_type: str, title: str, body: str, evidence_ids: list[str], audience_segment_id: str) -> str:
+def _html_to_text(value: str | None) -> str:
+    if not value:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", value)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def build_content_hash(
+    asset_type: str,
+    title: str,
+    body: str,
+    evidence_ids: list[str],
+    audience_segment_id: str,
+    *,
+    locale: str = "",
+    subject: str = "",
+    content_html: str | None = None,
+    content_text: str | None = None,
+    excerpt: str = "",
+    call_to_action: str = "",
+    target_url: str = "",
+) -> str:
     from app.core.security import sha256_hexdigest
 
+    html = content_html if content_html is not None else body
+    text = content_text if content_text is not None else _html_to_text(body) or body
     return sha256_hexdigest(
         json.dumps(
             {
                 "asset_type": asset_type,
+                "locale": locale,
                 "title": title,
-                "body": body,
+                "subject": subject,
+                "content_html": html,
+                "content_text": text,
+                "excerpt": excerpt,
+                "call_to_action": call_to_action,
+                "target_url": target_url,
                 "evidence_ids": evidence_ids,
                 "audience_segment_id": audience_segment_id,
             },
@@ -51,18 +81,127 @@ class ContentAsset:
     campaign_run_id: str = ""
     asset_type: str = "article"
     channel: str = "web"
+    locale: str = "fr-FR"
     title: str = ""
-    body: str = ""
-    evidence_ids: list[str] = field(default_factory=list)
+    subject: str = ""
+    content_html: str | None = None
+    content_text: str = ""
+    excerpt: str = ""
+    call_to_action: str = ""
+    target_url: str = ""
+    source_evidence_ids: list[str] = field(default_factory=list)
     audience_segment_id: str = ""
     status: AssetStatus = AssetStatus.DRAFT
+    content_version: int = 1
     content_hash: str = ""
+    approved_content_hash: str = ""
     approved_by: str = ""
     approved_at: datetime | None = None
     scheduled_at: datetime | None = None
+    published_at: datetime | None = None
+    external_publication_id: str = ""
+    external_publication_url: str = ""
+    last_error: str = ""
+    retry_count: int = 0
     results: dict[str, Any] = field(default_factory=dict)
+    body: str = ""
+    evidence_ids: list[str] = field(default_factory=list)
     revision: int = 1
     created_at: datetime = field(default_factory=utcnow)
+
+    def __post_init__(self) -> None:
+        self._sync_legacy_fields()
+
+    @property
+    def campaign_id(self) -> str:
+        return self.campaign_run_id
+
+    @campaign_id.setter
+    def campaign_id(self, value: str) -> None:
+        self.campaign_run_id = value
+
+    def _sync_legacy_fields(self) -> None:
+        if self.body:
+            if self.content_html is None or self.content_html != self.body:
+                self.content_html = self.body
+            self.content_text = _html_to_text(self.body) or self.body
+        elif self.content_html is not None:
+            self.body = self.content_html
+        else:
+            self.body = self.content_text
+        if self.evidence_ids and self.evidence_ids != self.source_evidence_ids:
+            self.source_evidence_ids = list(self.evidence_ids)
+        elif self.source_evidence_ids and not self.evidence_ids:
+            self.evidence_ids = list(self.source_evidence_ids)
+        if self.revision != 1 and self.content_version == 1:
+            self.content_version = self.revision
+        else:
+            self.revision = self.content_version
+
+    def ensure_content_hash(self) -> str:
+        self._sync_legacy_fields()
+        new_hash = build_content_hash(
+            self.asset_type,
+            self.title,
+            self.body,
+            list(self.source_evidence_ids),
+            self.audience_segment_id,
+            locale=self.locale,
+            subject=self.subject,
+            content_html=self.content_html,
+            content_text=self.content_text,
+            excerpt=self.excerpt,
+            call_to_action=self.call_to_action,
+            target_url=self.target_url,
+        )
+        changed = self.content_hash and self.content_hash != new_hash
+        self.content_hash = new_hash
+        if changed and self.approved_content_hash and self.approved_content_hash != new_hash:
+            self.approved_content_hash = ""
+            self.approved_by = ""
+            self.approved_at = None
+            if self.status in {AssetStatus.APPROVED, AssetStatus.SCHEDULED, AssetStatus.PUBLISHING}:
+                self.status = AssetStatus.READY_FOR_REVIEW
+        return self.content_hash
+
+    def approve(self, decided_by: str) -> None:
+        self.ensure_content_hash()
+        self.approved_content_hash = self.content_hash
+        self.approved_by = decided_by
+        self.approved_at = utcnow()
+        self.status = AssetStatus.APPROVED
+        self.last_error = ""
+
+    def request_changes(self) -> None:
+        self.content_version += 1
+        self.revision = self.content_version
+        self.approved_content_hash = ""
+        self.approved_by = ""
+        self.approved_at = None
+        self.status = AssetStatus.CHANGES_REQUESTED
+
+    def mark_scheduled(self) -> None:
+        self.status = AssetStatus.SCHEDULED
+        self.last_error = ""
+
+    def mark_publishing(self) -> None:
+        self.status = AssetStatus.PUBLISHING
+        self.last_error = ""
+
+    def mark_published(self, *, external_id: str = "", external_url: str = "", published_at: datetime | None = None) -> None:
+        self.status = AssetStatus.PUBLISHED
+        self.published_at = published_at or utcnow()
+        self.external_publication_id = external_id
+        self.external_publication_url = external_url
+        self.last_error = ""
+
+    def mark_failed(self, error: str) -> None:
+        self.status = AssetStatus.FAILED
+        self.last_error = error
+        self.retry_count += 1
+
+    def cancel(self) -> None:
+        self.status = AssetStatus.CANCELLED
 
 
 @dataclass
@@ -88,8 +227,10 @@ class ApprovalDecision:
 class Publication:
     id: str = field(default_factory=lambda: str(uuid4()))
     campaign_run_id: str = ""
+    content_asset_id: str = ""
     channel: str = ""
     external_reference: str = ""
+    external_url: str = ""
     published_at: datetime = field(default_factory=utcnow)
 
 
@@ -399,6 +540,30 @@ class LinkedInPublication:
 
 
 @dataclass
+class OlingNewsPublication:
+    id: str = field(default_factory=lambda: str(uuid4()))
+    campaign_run_id: str = ""
+    content_asset_id: str = ""
+    external_id: str = ""
+    content_hash: str = ""
+    status: str = "draft"
+    mode: str = "mock"
+    idempotency_key: str = ""
+    preview_url: str = ""
+    public_url: str = ""
+    public_slug: str = ""
+    draft_revision_number: int | None = None
+    published_revision_number: int | None = None
+    published_content_version: int | None = None
+    published_at: datetime | None = None
+    unpublished_at: datetime | None = None
+    last_error: str = ""
+    metrics: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=utcnow)
+    updated_at: datetime = field(default_factory=utcnow)
+
+
+@dataclass
 class CampaignRun:
     id: str = field(default_factory=lambda: str(uuid4()))
     name: str = ""
@@ -414,6 +579,29 @@ class CampaignRun:
     interactions: list[Interaction] = field(default_factory=list)
     leads: list[Lead] = field(default_factory=list)
     source_evidences: list[SourceEvidence] = field(default_factory=list)
+
+    def _find_asset(self, asset_id: str) -> ContentAsset:
+        for asset in self.content_assets:
+            if asset.id == asset_id:
+                return asset
+        raise ApprovalPrerequisiteError(f"Campaign {self.id} has no asset {asset_id}.")
+
+    def _sync_status_from_assets(self) -> None:
+        published_assets = [asset for asset in self.content_assets if asset.status is AssetStatus.PUBLISHED]
+        active_assets = [asset for asset in self.content_assets if asset.status is not AssetStatus.CANCELLED]
+        approved_assets = [asset for asset in active_assets if asset.status in {AssetStatus.APPROVED, AssetStatus.SCHEDULED, AssetStatus.PUBLISHING, AssetStatus.PUBLISHED}]
+        if published_assets:
+            if active_assets and len(published_assets) == len(active_assets):
+                self.status = CampaignStatus.PUBLISHED
+            else:
+                self.status = CampaignStatus.PARTIALLY_PUBLISHED
+        elif approved_assets:
+            self.status = CampaignStatus.APPROVED
+        elif any(asset.status is AssetStatus.CHANGES_REQUESTED for asset in active_assets):
+            self.status = CampaignStatus.CHANGES_REQUESTED
+        elif self.content_assets:
+            self.status = CampaignStatus.GENERATED
+        self.updated_at = utcnow()
 
     def _transition_to(self, next_status: CampaignStatus, allowed_from: set[CampaignStatus]) -> None:
         if self.status not in allowed_from:
@@ -432,37 +620,65 @@ class CampaignRun:
                 campaign_run_id=asset.campaign_run_id,
                 asset_type=asset.asset_type,
                 channel=asset.channel,
+                locale=asset.locale,
                 title=asset.title,
-                body=asset.body,
-                evidence_ids=list(asset.evidence_ids),
+                subject=asset.subject,
+                content_html=asset.content_html if asset.content_html is not None else asset.body,
+                content_text=asset.content_text or _html_to_text(asset.body) or asset.body,
+                excerpt=asset.excerpt,
+                call_to_action=asset.call_to_action,
+                target_url=asset.target_url,
+                source_evidence_ids=list(asset.source_evidence_ids or asset.evidence_ids),
                 audience_segment_id=asset.audience_segment_id,
                 status=AssetStatus.READY_FOR_REVIEW,
+                content_version=asset.content_version or asset.revision,
                 content_hash=asset.content_hash
                 or build_content_hash(
                     asset.asset_type,
                     asset.title,
                     asset.body,
-                    list(asset.evidence_ids),
+                    list(asset.source_evidence_ids or asset.evidence_ids),
                     asset.audience_segment_id,
+                    locale=asset.locale,
+                    subject=asset.subject,
+                    content_html=asset.content_html,
+                    content_text=asset.content_text,
+                    excerpt=asset.excerpt,
+                    call_to_action=asset.call_to_action,
+                    target_url=asset.target_url,
                 ),
+                approved_content_hash=asset.approved_content_hash,
                 approved_by=asset.approved_by,
                 approved_at=asset.approved_at,
                 scheduled_at=asset.scheduled_at,
+                published_at=asset.published_at,
+                external_publication_id=asset.external_publication_id,
+                external_publication_url=asset.external_publication_url,
+                last_error=asset.last_error,
+                retry_count=asset.retry_count,
                 results=dict(asset.results),
-                revision=asset.revision,
                 created_at=asset.created_at,
             )
             for asset in assets
         ]
+        for asset in self.content_assets:
+            asset.ensure_content_hash()
 
     def request_changes(self, comment: str, decided_by: str) -> ApprovalDecision:
-        self._transition_to(
-            CampaignStatus.CHANGES_REQUESTED,
-            {CampaignStatus.GENERATED, CampaignStatus.APPROVED},
-        )
+        if self.status not in {CampaignStatus.GENERATED, CampaignStatus.APPROVED, CampaignStatus.CHANGES_REQUESTED}:
+            raise InvalidStateTransitionError(
+                f"Cannot transition campaign {self.id} from {self.status} to {CampaignStatus.CHANGES_REQUESTED}."
+            )
         for asset in self.content_assets:
-            asset.status = AssetStatus.CHANGES_REQUESTED
-            asset.revision += 1
+            if asset.status in {
+                AssetStatus.DRAFT,
+                AssetStatus.QUALITY_CHECK,
+                AssetStatus.READY_FOR_REVIEW,
+                AssetStatus.APPROVED,
+                AssetStatus.SCHEDULED,
+                AssetStatus.FAILED,
+            }:
+                asset.request_changes()
         decision = ApprovalDecision(
             campaign_run_id=self.id,
             decision=CampaignStatus.CHANGES_REQUESTED.value,
@@ -470,6 +686,7 @@ class CampaignRun:
             comment=comment,
         )
         self.approval_decisions.append(decision)
+        self._sync_status_from_assets()
         return decision
 
     def approve(self, comment: str, decided_by: str) -> ApprovalDecision:
@@ -477,12 +694,9 @@ class CampaignRun:
             raise ApprovalPrerequisiteError(f"Campaign {self.id} has no content assets to approve.")
         if not self.source_evidences:
             raise ApprovalPrerequisiteError(f"Campaign {self.id} has no source evidence to approve.")
-        self._transition_to(
-            CampaignStatus.APPROVED,
-            {CampaignStatus.GENERATED, CampaignStatus.CHANGES_REQUESTED},
-        )
         for asset in self.content_assets:
-            asset.status = AssetStatus.APPROVED
+            if asset.status in {AssetStatus.READY_FOR_REVIEW, AssetStatus.QUALITY_CHECK, AssetStatus.CHANGES_REQUESTED, AssetStatus.DRAFT}:
+                asset.approve(decided_by)
         decision = ApprovalDecision(
             campaign_run_id=self.id,
             decision=CampaignStatus.APPROVED.value,
@@ -490,6 +704,35 @@ class CampaignRun:
             comment=comment,
         )
         self.approval_decisions.append(decision)
+        self._sync_status_from_assets()
+        return decision
+
+    def approve_asset(self, asset_id: str, comment: str, decided_by: str) -> ApprovalDecision:
+        if not self.source_evidences:
+            raise ApprovalPrerequisiteError(f"Campaign {self.id} has no source evidence to approve.")
+        asset = self._find_asset(asset_id)
+        asset.approve(decided_by)
+        decision = ApprovalDecision(
+            campaign_run_id=self.id,
+            decision=CampaignStatus.APPROVED.value,
+            decided_by=decided_by,
+            comment=comment,
+        )
+        self.approval_decisions.append(decision)
+        self._sync_status_from_assets()
+        return decision
+
+    def request_asset_changes(self, asset_id: str, comment: str, decided_by: str) -> ApprovalDecision:
+        asset = self._find_asset(asset_id)
+        asset.request_changes()
+        decision = ApprovalDecision(
+            campaign_run_id=self.id,
+            decision=CampaignStatus.CHANGES_REQUESTED.value,
+            decided_by=decided_by,
+            comment=comment,
+        )
+        self.approval_decisions.append(decision)
+        self._sync_status_from_assets()
         return decision
 
     def reject(self, comment: str, decided_by: str) -> ApprovalDecision:
@@ -507,16 +750,26 @@ class CampaignRun:
         return decision
 
     def publish(self, publication: Publication) -> None:
-        if self.status not in {CampaignStatus.APPROVED, CampaignStatus.PUBLISHED}:
+        if self.status not in {CampaignStatus.APPROVED, CampaignStatus.PARTIALLY_PUBLISHED, CampaignStatus.PUBLISHED}:
             raise CampaignPublicationForbiddenError(
                 f"Campaign {self.id} must be APPROVED before publication."
             )
+        publication_asset_id = getattr(publication, "content_asset_id", "")
         for existing in self.publications:
-            if existing.channel == publication.channel:
+            if publication_asset_id:
+                if existing.channel == publication.channel and existing.content_asset_id == publication_asset_id:
+                    return
+            elif existing.channel == publication.channel:
                 return
-        self.status = CampaignStatus.PUBLISHED
-        self.updated_at = utcnow()
         self.publications.append(publication)
+        if publication_asset_id:
+            asset = self._find_asset(publication_asset_id)
+            asset.mark_published(
+                external_id=publication.external_reference,
+                external_url=getattr(publication, "external_url", ""),
+                published_at=publication.published_at,
+            )
+        self._sync_status_from_assets()
 
 
 @dataclass

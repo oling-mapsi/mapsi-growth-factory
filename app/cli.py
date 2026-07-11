@@ -20,6 +20,8 @@ from app.application.services.editorial_agents import (
 from app.application.services.mapsi_usage_collection_service import MapsiUsageCollectionService
 from app.application.services.mautic_contact_sync_service import MauticContactSyncService
 from app.application.services.multichannel_content_service import MultichannelContentService
+from app.application.services.oling_news_publisher import OlingNewsPublisher
+from app.application.services.review_portal_service import ReviewPortalService
 from app.application.services.weekly_campaign_generation_service import WeeklyCampaignGenerationService
 from app.core.config import get_mapsi_instances, get_settings
 from app.core.db import Base, SessionLocal, engine
@@ -27,13 +29,16 @@ from app.infrastructure.agents.openai_backend import OpenAIAgentsBackend
 from app.infrastructure.agents.simulated_backend import SimulatedEditorialBackend
 from app.infrastructure.connectors.mautic import MauticConnector, build_mautic_config
 from app.infrastructure.connectors.mapsi_usage import MapsiInstanceConfig, MapsiUsageConnector
+from app.infrastructure.connectors.oling import OlingConnector, build_oling_config
 from app.infrastructure.repositories.audience_segments import AudienceSegmentationRepository
 from app.infrastructure.repositories.audit import SqlAlchemyAuditLogRepository
 from app.infrastructure.repositories.campaigns import SqlAlchemyCampaignRepository
 from app.infrastructure.repositories.editorial_pipeline import EditorialPipelineRepository
 from app.infrastructure.repositories.mautic_sync import MauticSyncRepository
 from app.infrastructure.repositories.mapsi_usage import MapsiUsageRepository
+from app.infrastructure.repositories.oling import OlingNewsPublicationRepository
 from app.infrastructure.repositories.review_portal import ReviewPortalRepository
+from app.infrastructure.db.models import ContentAssetModel
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,6 +62,10 @@ def build_parser() -> argparse.ArgumentParser:
     multichannel.add_argument("--campaign-id", required=True)
     multichannel.add_argument("--dry-run", action="store_true")
     multichannel.add_argument("--authorized-client", action="append", default=[])
+    publish_asset = subparsers.add_parser("publish-asset")
+    publish_asset.add_argument("--asset-id", required=True)
+    publish_asset.add_argument("--channel", required=True, choices=["oling"])
+    publish_asset.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -173,6 +182,33 @@ def main() -> int:
                         dry_run=args.dry_run,
                         authorized_client_mentions=args.authorized_client,
                     ),
+                    indent=2,
+                    sort_keys=True,
+                    default=str,
+                )
+            )
+        return 0
+    if args.command == "publish-asset":
+        Base.metadata.create_all(bind=engine)
+        with SessionLocal() as session:
+            row = session.query(ContentAssetModel.campaign_run_id).filter(ContentAssetModel.id == args.asset_id).one_or_none()
+            if row is None:
+                raise SystemExit(f"Unknown asset: {args.asset_id}")
+            repository = SqlAlchemyCampaignRepository(session)
+            audit_log = SqlAlchemyAuditLogRepository(session)
+            review_portal = ReviewPortalService(repository, ReviewPortalRepository(session), audit_log)
+            if args.channel != "oling":
+                raise SystemExit(f"Unsupported channel: {args.channel}")
+            service = OlingNewsPublisher(
+                campaign_repository=repository,
+                publication_repository=OlingNewsPublicationRepository(session),
+                connector=OlingConnector(build_oling_config()),
+                audit_log=audit_log,
+                review_portal=review_portal,
+            )
+            print(
+                json.dumps(
+                    service.publish_asset(row[0], args.asset_id, dry_run=args.dry_run),
                     indent=2,
                     sort_keys=True,
                     default=str,

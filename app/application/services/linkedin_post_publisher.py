@@ -34,21 +34,20 @@ class LinkedInPostPublisher:
         campaign = self.campaign_repository.get(campaign_id)
         if campaign is None:
             raise CampaignNotFoundError(f"Campaign {campaign_id} not found.")
-        if campaign.status not in {CampaignStatus.APPROVED, CampaignStatus.PUBLISHED}:
+        if campaign.status not in {CampaignStatus.APPROVED, CampaignStatus.PARTIALLY_PUBLISHED, CampaignStatus.PUBLISHED}:
             raise CampaignPublicationForbiddenError("Campaign must be APPROVED before LinkedIn publication.")
         asset = next((item for item in campaign.content_assets if item.id == asset_id), None)
         if asset is None:
             raise CampaignPublicationForbiddenError("LinkedIn asset not found.")
         if asset.channel != "linkedin":
             raise CampaignPublicationForbiddenError("Asset is not a LinkedIn asset.")
-        if asset.status is not AssetStatus.APPROVED:
-            raise CampaignPublicationForbiddenError("LinkedIn publication requires an APPROVED asset.")
-
         existing = self.publication_repository.get_by_asset_hash(asset.id, asset.content_hash)
         if existing and existing.status in {"published", "manual_copy"}:
             if idempotency_key and existing.idempotency_key and existing.idempotency_key != idempotency_key:
                 raise DuplicateCampaignPublicationError("This LinkedIn asset version has already been published.")
             return self._serialize(existing)
+        if asset.status is not AssetStatus.APPROVED:
+            raise CampaignPublicationForbiddenError("LinkedIn publication requires an APPROVED asset.")
 
         publication = existing or LinkedInPublication(
             campaign_run_id=campaign.id,
@@ -84,8 +83,15 @@ class LinkedInPostPublisher:
         publication = self.publication_repository.save(publication)
 
         asset.results = {**asset.results, "linkedin_post_urn": remote["post_urn"]}
-        if not any(item.channel == "linkedin" for item in campaign.publications):
-            campaign.publish(Publication(campaign_run_id=campaign.id, channel="linkedin", external_reference=remote["post_urn"]))
+        campaign.publish(
+            Publication(
+                campaign_run_id=campaign.id,
+                content_asset_id=asset.id,
+                channel="linkedin",
+                external_reference=remote["post_urn"],
+                external_url=remote["post_urn"],
+            )
+        )
         campaign.interactions.append(
             Interaction(
                 campaign_run_id=campaign.id,

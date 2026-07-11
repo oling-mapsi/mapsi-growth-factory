@@ -32,6 +32,7 @@ class SqlAlchemyCampaignRepository(CampaignRepositoryPort):
         self.session = session
 
     def add(self, campaign: CampaignRun) -> CampaignRun:
+        self._normalize_assets(campaign)
         model = self._to_model(campaign)
         self.session.add(model)
         self.session.commit()
@@ -61,6 +62,7 @@ class SqlAlchemyCampaignRepository(CampaignRepositoryPort):
         return [self._to_entity(model) for model in models]
 
     def save(self, campaign: CampaignRun) -> CampaignRun:
+        self._normalize_assets(campaign)
         model = self.session.get(CampaignRunModel, campaign.id)
         if model is None:
             return self.add(campaign)
@@ -69,6 +71,10 @@ class SqlAlchemyCampaignRepository(CampaignRepositoryPort):
         self.session.commit()
         persisted = self.session.get(CampaignRunModel, campaign.id)
         return self._to_entity(persisted)
+
+    def _normalize_assets(self, campaign: CampaignRun) -> None:
+        for asset in campaign.content_assets:
+            asset.ensure_content_hash()
 
     def _to_model(self, campaign: CampaignRun) -> CampaignRunModel:
         return CampaignRunModel(
@@ -94,11 +100,20 @@ class SqlAlchemyCampaignRepository(CampaignRepositoryPort):
                     campaign_run_id=campaign.id,
                     asset_type=item.asset_type,
                     channel=item.channel,
+                    locale=item.locale,
                     title=item.title,
+                    subject=item.subject,
                     body=item.body,
+                    content_html=item.content_html or item.body,
+                    content_text=item.content_text,
+                    excerpt=item.excerpt,
+                    call_to_action=item.call_to_action,
+                    target_url=item.target_url,
                     evidence_ids=item.evidence_ids,
+                    source_evidence_ids=item.source_evidence_ids or item.evidence_ids,
                     audience_segment_id=item.audience_segment_id,
                     status=item.status.value,
+                    content_version=item.content_version,
                     content_hash=item.content_hash
                     or build_content_hash(
                         item.asset_type,
@@ -106,12 +121,25 @@ class SqlAlchemyCampaignRepository(CampaignRepositoryPort):
                         item.body,
                         item.evidence_ids,
                         item.audience_segment_id,
+                        locale=item.locale,
+                        subject=item.subject,
+                        content_html=item.content_html,
+                        content_text=item.content_text,
+                        excerpt=item.excerpt,
+                        call_to_action=item.call_to_action,
+                        target_url=item.target_url,
                     ),
+                    approved_content_hash=item.approved_content_hash,
                     approved_by=item.approved_by,
                     approved_at=item.approved_at,
                     scheduled_at=item.scheduled_at,
+                    published_at=item.published_at,
+                    external_publication_id=item.external_publication_id,
+                    external_publication_url=item.external_publication_url,
+                    last_error=item.last_error,
+                    retry_count=item.retry_count,
                     results=item.results,
-                    revision=item.revision,
+                    revision=item.content_version,
                     created_at=item.created_at,
                 )
                 for item in campaign.content_assets
@@ -141,8 +169,10 @@ class SqlAlchemyCampaignRepository(CampaignRepositoryPort):
                 PublicationModel(
                     id=item.id,
                     campaign_run_id=campaign.id,
+                    content_asset_id=item.content_asset_id,
                     channel=item.channel,
                     external_reference=item.external_reference,
+                    external_url=item.external_url,
                     published_at=item.published_at,
                 )
                 for item in campaign.publications
@@ -206,15 +236,30 @@ class SqlAlchemyCampaignRepository(CampaignRepositoryPort):
                     campaign_run_id=item.campaign_run_id,
                     asset_type=item.asset_type,
                     channel=item.channel,
+                    locale=item.locale,
                     title=item.title,
+                    subject=item.subject,
+                    content_html=item.content_html or item.body,
+                    content_text=item.content_text or item.body,
                     body=item.body,
                     evidence_ids=list(item.evidence_ids or []),
+                    excerpt=item.excerpt,
+                    call_to_action=item.call_to_action,
+                    target_url=item.target_url,
+                    source_evidence_ids=list(item.source_evidence_ids or item.evidence_ids or []),
                     audience_segment_id=item.audience_segment_id,
                     status=AssetStatus(item.status),
+                    content_version=item.content_version or item.revision,
                     content_hash=item.content_hash,
+                    approved_content_hash=item.approved_content_hash,
                     approved_by=item.approved_by,
                     approved_at=item.approved_at,
                     scheduled_at=item.scheduled_at,
+                    published_at=item.published_at,
+                    external_publication_id=item.external_publication_id,
+                    external_publication_url=item.external_publication_url,
+                    last_error=item.last_error,
+                    retry_count=item.retry_count,
                     results=dict(item.results or {}),
                     revision=item.revision,
                     created_at=item.created_at,
@@ -246,8 +291,10 @@ class SqlAlchemyCampaignRepository(CampaignRepositoryPort):
                 Publication(
                     id=item.id,
                     campaign_run_id=item.campaign_run_id,
+                    content_asset_id=item.content_asset_id,
                     channel=item.channel,
                     external_reference=item.external_reference,
+                    external_url=item.external_url,
                     published_at=item.published_at,
                 )
                 for item in model.publications

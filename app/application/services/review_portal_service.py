@@ -88,7 +88,7 @@ class ReviewPortalService:
         scheduled_at_valid = scheduled_at is None or scheduled_at >= datetime.now(UTC)
         kill_switch_disabled = not self.settings.workflow_kill_switch
         publishable = (
-            campaign.status.value == "APPROVED"
+            campaign.status.value in {"APPROVED", "PARTIALLY_PUBLISHED"}
             and current_status["status"] == "approved"
             and content_hash_unchanged
             and audience_hash_unchanged

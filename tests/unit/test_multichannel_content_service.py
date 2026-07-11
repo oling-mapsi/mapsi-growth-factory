@@ -168,6 +168,34 @@ def test_generate_multichannel_assets_persists_supported_types(session) -> None:
     assert all(asset.status in {AssetStatus.APPROVED, AssetStatus.READY_FOR_REVIEW} for asset in persisted.content_assets)
 
 
+def test_content_change_invalidates_only_modified_asset(session) -> None:
+    repository = SqlAlchemyCampaignRepository(session)
+    campaign = CampaignRun(name="Campaign", objective="Obj", status=CampaignStatus.GENERATED)
+    campaign.content_assets = [
+        ContentAsset(campaign_run_id=campaign.id, asset_type="linkedin_company_post", channel="linkedin", title="A", body="<p>A</p>", status=AssetStatus.READY_FOR_REVIEW),
+        ContentAsset(campaign_run_id=campaign.id, asset_type="oling_news_article", channel="oling", title="B", body="<p>B</p>", status=AssetStatus.READY_FOR_REVIEW),
+    ]
+    campaign.source_evidences = [SourceEvidence(campaign_run_id=campaign.id, source_system="github", reference="sha:1")]
+    repository.add(campaign)
+
+    campaign = repository.get(campaign.id)
+    campaign.approve_asset(campaign.content_assets[0].id, "ok", "admin")
+    campaign.approve_asset(campaign.content_assets[1].id, "ok", "admin")
+    first_hash = campaign.content_assets[0].approved_content_hash
+    second_hash = campaign.content_assets[1].approved_content_hash
+    campaign.content_assets[0].body = "<p>Changed</p>"
+
+    persisted = repository.save(campaign)
+
+    assert persisted.content_assets[0].approved_content_hash == ""
+    assert persisted.content_assets[0].approved_by == ""
+    assert persisted.content_assets[0].approved_at is None
+    assert persisted.content_assets[0].status is AssetStatus.READY_FOR_REVIEW
+    assert persisted.content_assets[1].approved_content_hash == second_hash
+    assert persisted.content_assets[1].approved_content_hash != first_hash
+    assert persisted.status is CampaignStatus.APPROVED
+
+
 def test_generate_multichannel_blocks_unauthorized_client_mention(session) -> None:
     campaign_id = seed_campaign(session)
     evidence_id = SqlAlchemyCampaignRepository(session).get(campaign_id).source_evidences[0].id

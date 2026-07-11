@@ -1,0 +1,97 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from sqlalchemy.orm import Session
+
+from app.domain.entities import OlingNewsPublication
+from app.infrastructure.db.models import OlingNewsPublicationModel
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class OlingNewsPublicationRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def get_by_asset_hash(self, content_asset_id: str, content_hash: str) -> OlingNewsPublication | None:
+        model = (
+            self.session.query(OlingNewsPublicationModel)
+            .filter(
+                OlingNewsPublicationModel.content_asset_id == content_asset_id,
+                OlingNewsPublicationModel.content_hash == content_hash,
+            )
+            .one_or_none()
+        )
+        return self._to_entity(model) if model else None
+
+    def get_latest_for_asset(self, content_asset_id: str) -> OlingNewsPublication | None:
+        model = (
+            self.session.query(OlingNewsPublicationModel)
+            .filter(OlingNewsPublicationModel.content_asset_id == content_asset_id)
+            .order_by(OlingNewsPublicationModel.updated_at.desc())
+            .first()
+        )
+        return self._to_entity(model) if model else None
+
+    def get_by_external_id(self, external_id: str) -> OlingNewsPublication | None:
+        model = (
+            self.session.query(OlingNewsPublicationModel)
+            .filter(OlingNewsPublicationModel.external_id == external_id)
+            .one_or_none()
+        )
+        return self._to_entity(model) if model else None
+
+    def save(self, publication: OlingNewsPublication) -> OlingNewsPublication:
+        model = self.session.get(OlingNewsPublicationModel, publication.id)
+        if model is None:
+            model = OlingNewsPublicationModel(id=publication.id)
+            self.session.add(model)
+        model.campaign_run_id = publication.campaign_run_id
+        model.content_asset_id = publication.content_asset_id
+        model.external_id = publication.external_id
+        model.content_hash = publication.content_hash
+        model.status = publication.status
+        model.mode = publication.mode
+        model.idempotency_key = publication.idempotency_key
+        model.preview_url = publication.preview_url
+        model.public_url = publication.public_url
+        model.public_slug = publication.public_slug
+        model.draft_revision_number = publication.draft_revision_number
+        model.published_revision_number = publication.published_revision_number
+        model.published_content_version = publication.published_content_version
+        model.published_at = publication.published_at
+        model.unpublished_at = publication.unpublished_at
+        model.last_error = publication.last_error
+        model.metrics = publication.metrics
+        model.created_at = publication.created_at
+        model.updated_at = utcnow()
+        self.session.commit()
+        self.session.refresh(model)
+        return self._to_entity(model)
+
+    def _to_entity(self, model: OlingNewsPublicationModel) -> OlingNewsPublication:
+        return OlingNewsPublication(
+            id=model.id,
+            campaign_run_id=model.campaign_run_id,
+            content_asset_id=model.content_asset_id,
+            external_id=model.external_id,
+            content_hash=model.content_hash,
+            status=model.status,
+            mode=model.mode,
+            idempotency_key=model.idempotency_key,
+            preview_url=model.preview_url,
+            public_url=model.public_url,
+            public_slug=model.public_slug,
+            draft_revision_number=model.draft_revision_number,
+            published_revision_number=model.published_revision_number,
+            published_content_version=model.published_content_version,
+            published_at=model.published_at,
+            unpublished_at=model.unpublished_at,
+            last_error=model.last_error,
+            metrics=dict(model.metrics or {}),
+            created_at=model.created_at,
+            updated_at=model.updated_at,
+        )

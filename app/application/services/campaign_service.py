@@ -5,7 +5,8 @@ from app.application.ports.repositories import CampaignRepositoryPort
 from app.application.ports.tasks import TaskQueuePort
 from app.application.services.review_portal_service import ReviewPortalService
 from app.domain.entities import AudienceSegment, CampaignRun
-from app.domain.errors import CampaignNotFoundError
+from app.domain.enums import AssetStatus
+from app.domain.errors import CampaignNotFoundError, CampaignPublicationForbiddenError
 
 
 class CampaignService:
@@ -94,8 +95,18 @@ class CampaignService:
         if self.review_portal is not None:
             self.review_portal.ensure_publishable(campaign_id)
         for channel in command.channels:
-            publication = self.publisher.publish(campaign, channel)
-            campaign.publish(publication)
+            assets = [
+                asset
+                for asset in campaign.content_assets
+                if asset.channel == channel and asset.status in {AssetStatus.APPROVED, AssetStatus.FAILED}
+            ]
+            if not assets:
+                raise CampaignPublicationForbiddenError(
+                    f"Campaign {campaign.id} has no APPROVED assets for channel {channel}."
+                )
+            for asset in assets:
+                publication = self.publisher.publish(campaign, asset)
+                campaign.publish(publication)
         saved = self.repository.save(campaign)
         self.audit_log.append(
             saved.id,

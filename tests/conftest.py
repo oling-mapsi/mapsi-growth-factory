@@ -15,6 +15,10 @@ os.environ["GITHUB_WEBHOOK_SECRET"] = "test-github-secret"
 os.environ["GITHUB_ALLOWED_REPOSITORIES"] = "mapsi/mapsi-v6"
 os.environ["MAPSI_GROWTH_BASE_URL"] = "https://mapsi-v6.example.test"
 os.environ["MAPSI_GROWTH_BEARER_TOKEN"] = "test-growth-bearer"
+os.environ["OLING_MODE"] = "mock"
+os.environ["OLING_API_TOKEN"] = "oling-test-token"
+os.environ["OLING_BASE_URL"] = "http://testserver"
+os.environ["OLING_SITE_BASE_URL"] = "https://www.oling.fr"
 
 from app.core.db import Base
 from app.infrastructure.db import models  # noqa: F401
@@ -74,6 +78,7 @@ from app.mock_mautic_server import app as mautic_mock_app
 from app.mock_mautic_server import STATE as MAUTIC_STATE
 from app.mock_linkedin_server import app as linkedin_mock_app
 from app.mock_linkedin_server import STATE as LINKEDIN_STATE
+from app.mock_oling_server import STATE as OLING_STATE
 from app.main import create_app
 from app.application.services.campaign_service import CampaignService
 from app.core.config import get_settings
@@ -96,6 +101,8 @@ def reset_database() -> Generator[None, None, None]:
     LINKEDIN_STATE["posts"].clear()
     LINKEDIN_STATE["metrics"].clear()
     LINKEDIN_STATE["uploads"].clear()
+    OLING_STATE["articles"].clear()
+    OLING_STATE["preview_tokens"].clear()
     Base.metadata.create_all(bind=engine)
     yield
     Base.metadata.drop_all(bind=engine)

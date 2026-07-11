@@ -41,9 +41,11 @@ def test_campaign_api_lifecycle(client) -> None:
         json={"channels": ["linkedin", "oling"]},
     )
     assert publish_response.status_code == 200
-    assert publish_response.json()["status"] == "PUBLISHED"
+    assert publish_response.json()["status"] == "PARTIALLY_PUBLISHED"
     assert len(publish_response.json()["publications"]) == 2
-    assert publish_response.json()["content_assets"][0]["status"] == "APPROVED"
+    assert {item["status"] for item in publish_response.json()["content_assets"]} == {"PUBLISHED", "APPROVED"}
+    assert "content_version" in publish_response.json()["content_assets"][0]
+    assert "external_publication_id" in publish_response.json()["content_assets"][0]
 
 
 def test_campaign_api_requires_authentication(client) -> None:

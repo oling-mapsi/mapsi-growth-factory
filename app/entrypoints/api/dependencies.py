@@ -27,6 +27,7 @@ from app.application.services.linkedin_oauth_service import LinkedInOAuthService
 from app.application.services.linkedin_organization_resolver import LinkedInOrganizationResolver
 from app.application.services.linkedin_post_publisher import LinkedInPostPublisher
 from app.application.services.linkedin_media_uploader import LinkedInMediaUploader
+from app.application.services.oling_news_publisher import OlingNewsPublisher
 from app.application.services.review_portal_service import ReviewPortalService
 from app.application.services.task_worker_service import TaskWorkerService
 from app.application.services.weekly_campaign_generation_service import WeeklyCampaignGenerationService
@@ -41,13 +42,19 @@ from app.infrastructure.connectors.fakes import (
     SimulatedGitHubConnector,
     SimulatedLinkedInConnector,
     SimulatedMAPSIConnector,
+    SimulatedMapsiSiteConnector,
+    SimulatedMapsiStudioConnector,
+    SimulatedMapsiUsersConnector,
     SimulatedMauticConnector,
     SimulatedMicrosoftGraphConnector,
+    OlingMockPublisher,
     SimulatedOlingSiteConnector,
+    SimulatedProspectNewsletterConnector,
 )
 from app.infrastructure.connectors.github import GitHubConnector
 from app.infrastructure.connectors.linkedin import LinkedInConnector, build_linkedin_config
 from app.infrastructure.connectors.mautic import MauticConnector, build_mautic_config
+from app.infrastructure.connectors.oling import OlingConnector, build_oling_config
 from app.infrastructure.connectors.mapsi_usage import MapsiInstanceConfig, MapsiUsageConnector
 from app.generated.mapsi_contract_client import MapsiContractClient
 from app.infrastructure.repositories.audit import SqlAlchemyAuditLogRepository
@@ -58,6 +65,7 @@ from app.infrastructure.repositories.mapsi_usage import MapsiUsageRepository
 from app.infrastructure.repositories.mautic_sync import MauticSyncRepository
 from app.infrastructure.repositories.mautic_publications import MauticPublicationRepository
 from app.infrastructure.repositories.linkedin import LinkedInOAuthTokenRepository, LinkedInPublicationRepository
+from app.infrastructure.repositories.oling import OlingNewsPublicationRepository
 from app.infrastructure.repositories.review_portal import ReviewPortalRepository
 from app.infrastructure.repositories.product_intelligence import (
     SqlAlchemyProductChangeRepository,
@@ -89,14 +97,29 @@ def get_campaign_service(session: Session = Depends(get_db_session)) -> Campaign
             SimulatedDolibarrConnector(),
         ]
     )
+    review_portal = ReviewPortalService(repository, ReviewPortalRepository(session), audit_log)
+    oling_publisher = (
+        OlingMockPublisher()
+        if settings.oling_mode == "mock" or settings.app_env in {"development", "test"}
+        else OlingNewsPublisher(
+            campaign_repository=repository,
+            publication_repository=OlingNewsPublicationRepository(session),
+            connector=OlingConnector(build_oling_config(settings)),
+            audit_log=audit_log,
+            review_portal=review_portal,
+        )
+    )
     publisher = CompositeSimulatedPublisher(
         {
             "linkedin": SimulatedLinkedInConnector(),
-            "oling": SimulatedOlingSiteConnector(),
+            "oling": oling_publisher,
+            "mapsi_site": SimulatedMapsiSiteConnector(),
+            "mapsi_studio": SimulatedMapsiStudioConnector(),
+            "mapsi_users": SimulatedMapsiUsersConnector(),
+            "prospect_newsletter": SimulatedProspectNewsletterConnector(),
         }
     )
     task_queue = RedisTaskQueue(settings.redis_url, settings.redis_queue_name)
-    review_portal = ReviewPortalService(repository, ReviewPortalRepository(session), audit_log)
     return CampaignService(repository, generator, publisher, audit_log, task_queue, review_portal=review_portal)
 
 
@@ -248,6 +271,19 @@ def get_linkedin_post_publisher(session: Session = Depends(get_db_session)) -> L
         organization_resolver=resolver,
         connector=connector,
         audit_log=audit_log,
+    )
+
+
+def get_oling_news_publisher(session: Session = Depends(get_db_session)) -> OlingNewsPublisher:
+    repository = SqlAlchemyCampaignRepository(session)
+    audit_log = SqlAlchemyAuditLogRepository(session)
+    review_portal = ReviewPortalService(repository, ReviewPortalRepository(session), audit_log)
+    return OlingNewsPublisher(
+        campaign_repository=repository,
+        publication_repository=OlingNewsPublicationRepository(session),
+        connector=OlingConnector(build_oling_config()),
+        audit_log=audit_log,
+        review_portal=review_portal,
     )
 
 
