@@ -163,7 +163,7 @@ class SqlAlchemySourceEvidenceRepository(SourceEvidenceRepositoryPort):
             self.session.merge(
                 SourceEvidenceModel(
                     id=evidence.id,
-                    campaign_run_id=evidence.campaign_run_id,
+                    campaign_run_id=evidence.campaign_run_id or None,
                     product_change_id=evidence.product_change_id or None,
                     source_system=evidence.source_system,
                     evidence_type=evidence.evidence_type,

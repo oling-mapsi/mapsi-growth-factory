@@ -65,6 +65,7 @@ def test_collect_product_changes_persists_contract_items(session) -> None:
     assert change.pr_number == 2101
     assert evidence.source_system == "mapsi-v6"
     assert evidence.reference == "https://github.com/oling-mapsi/mapsi-v6/pull/2101"
+    assert evidence.campaign_run_id is None
 
 
 def test_collect_product_changes_is_idempotent_with_stable_ids(session) -> None:
@@ -124,3 +125,4 @@ def test_collect_product_changes_accepts_prod_payload_shape(session) -> None:
     assert change.pr_number == 1842
     assert change.eligible_for_communication is True
     assert evidence.reference == "https://github.com/oling-mapsi/mapsi-v6/pull/1842"
+    assert evidence.campaign_run_id is None
