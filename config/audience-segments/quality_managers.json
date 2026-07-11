@@ -1,0 +1,15 @@
+{
+  "id": "quality_managers",
+  "label": "Responsables qualite",
+  "description": "Profils qualite identifies par leur role.",
+  "enabled": true,
+  "legal_basis": "legitimate_interest_product_updates",
+  "conditions": {
+    "all": [
+      { "field": "active", "operator": "equals", "value": true },
+      { "field": "communication_eligible", "operator": "equals", "value": true },
+      { "field": "role_key", "operator": "in", "value": ["quality_manager", "quality_admin"] }
+    ]
+  },
+  "exclusions": ["opted_out", "invalid_email", "account_suspended"]
+}

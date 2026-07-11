@@ -1,0 +1,14 @@
+{
+  "id": "all_eligible_active_users",
+  "label": "Tous les utilisateurs actifs eligibles",
+  "description": "Base de communication generale pour les utilisateurs actifs avec base legale.",
+  "enabled": true,
+  "legal_basis": "legitimate_interest_growth",
+  "conditions": {
+    "all": [
+      { "field": "active", "operator": "equals", "value": true },
+      { "field": "communication_eligible", "operator": "equals", "value": true }
+    ]
+  },
+  "exclusions": ["opted_out", "invalid_email", "account_suspended"]
+}

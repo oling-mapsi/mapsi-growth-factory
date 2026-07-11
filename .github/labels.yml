@@ -1,0 +1,33 @@
+- name: lot-1
+  color: "0E8A16"
+  description: "Travail du lot 1"
+- name: lot-2
+  color: "1D76DB"
+  description: "Travail du lot 2"
+- name: lot-3
+  color: "5319E7"
+  description: "Travail du lot 3"
+- name: lot-4
+  color: "B60205"
+  description: "Travail du lot 4"
+- name: growth
+  color: "0052CC"
+  description: "Sujet propre a Growth Factory"
+- name: cross-repository
+  color: "FBCA04"
+  description: "Evolution synchronisee entre MAPSI et Growth Factory"
+- name: contract-change
+  color: "D93F0B"
+  description: "Changement de contrat entre applications"
+- name: security-review
+  color: "BFDADC"
+  description: "Revue securite requise"
+- name: human-approval
+  color: "F9D0C4"
+  description: "Validation humaine obligatoire"
+- name: ready-for-staging
+  color: "0E8A16"
+  description: "Pret pour staging"
+- name: blocked
+  color: "000000"
+  description: "Bloque par une dependance ou une decision"

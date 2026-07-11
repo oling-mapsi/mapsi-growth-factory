@@ -1,0 +1,243 @@
+openapi: 3.1.0
+info:
+  title: MAPSI Growth Internal Contract
+  version: 1.3.0
+  description: Synthetic contract used by Growth Factory for local development.
+servers:
+  - url: http://localhost:8010
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      responses:
+        "200":
+          description: Instance health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /internal/growth/capabilities:
+    get:
+      operationId: getCapabilities
+      responses:
+        "200":
+          description: Instance capabilities
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapabilitySnapshot"
+  /internal/growth/usage-snapshot:
+    get:
+      operationId: getUsageSnapshot
+      parameters:
+        - in: query
+          name: cursor
+          schema:
+            type: string
+        - in: query
+          name: page_size
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Usage snapshot page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageSnapshotPage"
+  /internal/growth/contact-snapshot:
+    get:
+      operationId: getContactSnapshot
+      parameters:
+        - in: query
+          name: cursor
+          schema:
+            type: string
+        - in: query
+          name: page_size
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Contact snapshot page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContactSnapshotPage"
+  /internal/growth/product-changes:
+    get:
+      operationId: getProductChanges
+      responses:
+        "200":
+          description: Product changes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductChangeCollection"
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      additionalProperties: false
+      required: [status, instance_id, contract_version]
+      properties:
+        status:
+          type: string
+        instance_id:
+          type: string
+        contract_version:
+          type: string
+    Capability:
+      type: object
+      additionalProperties: false
+      required: [capability_key, enabled, version]
+      properties:
+        capability_key:
+          type: string
+        enabled:
+          type: boolean
+        version:
+          type: string
+    CapabilitySnapshot:
+      type: object
+      additionalProperties: false
+      required: [instance_id, contract_version, generated_at, capabilities]
+      properties:
+        instance_id:
+          type: string
+        contract_version:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
+        capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/Capability"
+    UsageModule:
+      type: object
+      additionalProperties: false
+      required: [module_key, events_last_7_days]
+      properties:
+        module_key:
+          type: string
+        events_last_7_days:
+          type: integer
+          minimum: 0
+    UsageUser:
+      type: object
+      additionalProperties: false
+      required: [user_id, tenant_id, active, role_key, last_activity_at, modules]
+      properties:
+        user_id:
+          type: string
+        tenant_id:
+          type: string
+        active:
+          type: boolean
+        role_key:
+          type: string
+        last_activity_at:
+          type: string
+          format: date-time
+        communication_eligible:
+          type: boolean
+        opted_out:
+          type: boolean
+        modules:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageModule"
+    UsageSnapshotPage:
+      type: object
+      additionalProperties: false
+      required: [instance_id, contract_version, captured_at, users, has_more]
+      properties:
+        instance_id:
+          type: string
+        contract_version:
+          type: string
+        captured_at:
+          type: string
+          format: date-time
+        cursor:
+          type: string
+        next_cursor:
+          type: string
+        has_more:
+          type: boolean
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageUser"
+    ContactEntry:
+      type: object
+      additionalProperties: false
+      required: [user_id, tenant_id, email, communication_eligible, active]
+      properties:
+        user_id:
+          type: string
+        tenant_id:
+          type: string
+        email:
+          type: string
+          format: email
+        communication_eligible:
+          type: boolean
+        active:
+          type: boolean
+        opted_out:
+          type: boolean
+        role_key:
+          type: string
+        opt_out_reason:
+          type: string
+    ContactSnapshotPage:
+      type: object
+      additionalProperties: false
+      required: [instance_id, contract_version, generated_at, contacts, has_more]
+      properties:
+        instance_id:
+          type: string
+        contract_version:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
+        cursor:
+          type: string
+        next_cursor:
+          type: string
+        has_more:
+          type: boolean
+        contacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContactEntry"
+    ProductChange:
+      type: object
+      additionalProperties: false
+      required: [change_id, version, deployed_at, capability_key, summary]
+      properties:
+        change_id:
+          type: string
+        version:
+          type: string
+        deployed_at:
+          type: string
+          format: date-time
+        capability_key:
+          type: string
+        summary:
+          type: string
+        audience_hint:
+          type: string
+    ProductChangeCollection:
+      type: object
+      additionalProperties: false
+      required: [changes]
+      properties:
+        changes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductChange"

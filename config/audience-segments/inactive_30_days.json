@@ -1,0 +1,15 @@
+{
+  "id": "inactive_30_days",
+  "label": "Utilisateurs inactifs depuis 30 jours",
+  "description": "Utilisateurs actifs sur le compte mais sans activite recente.",
+  "enabled": true,
+  "legal_basis": "legitimate_interest_reactivation",
+  "conditions": {
+    "all": [
+      { "field": "active", "operator": "equals", "value": true },
+      { "field": "communication_eligible", "operator": "equals", "value": true },
+      { "field": "last_login_days", "operator": "greater_than", "value": 30 }
+    ]
+  },
+  "exclusions": ["opted_out", "invalid_email", "account_suspended"]
+}

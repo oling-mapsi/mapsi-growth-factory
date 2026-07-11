@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UsageSnapshotPage",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["instance_id", "contract_version", "captured_at", "users", "has_more"],
+  "properties": {
+    "instance_id": {"type": "string"},
+    "contract_version": {"type": "string"},
+    "captured_at": {"type": "string", "format": "date-time"},
+    "cursor": {"type": "string"},
+    "next_cursor": {"type": "string"},
+    "has_more": {"type": "boolean"},
+    "users": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["user_id", "tenant_id", "active", "role_key", "last_activity_at", "modules"],
+        "properties": {
+          "user_id": {"type": "string"},
+          "tenant_id": {"type": "string"},
+          "active": {"type": "boolean"},
+          "role_key": {"type": "string"},
+          "last_activity_at": {"type": "string", "format": "date-time"},
+          "communication_eligible": {"type": "boolean"},
+          "opted_out": {"type": "boolean"},
+          "modules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["module_key", "events_last_7_days"],
+              "properties": {
+                "module_key": {"type": "string"},
+                "events_last_7_days": {"type": "integer", "minimum": 0}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

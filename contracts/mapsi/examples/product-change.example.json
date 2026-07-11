@@ -1,0 +1,12 @@
+{
+  "changes": [
+    {
+      "change_id": "chg_2026_07_001",
+      "version": "1.2.0",
+      "deployed_at": "2026-07-10T20:00:00Z",
+      "capability_key": "planning-dashboard",
+      "summary": "Synthetic example of a delivered capability.",
+      "audience_hint": "project-managers"
+    }
+  ]
+}

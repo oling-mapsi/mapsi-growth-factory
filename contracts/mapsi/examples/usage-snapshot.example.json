@@ -1,0 +1,25 @@
+{
+  "instance_id": "gpmlm",
+  "contract_version": "1.3.0",
+  "captured_at": "2026-07-11T09:30:00Z",
+  "cursor": "",
+  "next_cursor": "",
+  "has_more": false,
+  "users": [
+    {
+      "user_id": "usr_demo_001",
+      "tenant_id": "tenant_alpha",
+      "active": true,
+      "role_key": "manager",
+      "last_activity_at": "2026-07-10T15:00:00Z",
+      "communication_eligible": true,
+      "opted_out": false,
+      "modules": [
+        {
+          "module_key": "planning",
+          "events_last_7_days": 12
+        }
+      ]
+    }
+  ]
+}

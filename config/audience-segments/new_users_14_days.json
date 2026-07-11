@@ -1,0 +1,15 @@
+{
+  "id": "new_users_14_days",
+  "label": "Nouveaux utilisateurs 14 jours",
+  "description": "Utilisateurs recents determines via la date de creation de l'adhesion de compte.",
+  "enabled": true,
+  "legal_basis": "legitimate_interest_onboarding",
+  "conditions": {
+    "all": [
+      { "field": "active", "operator": "equals", "value": true },
+      { "field": "communication_eligible", "operator": "equals", "value": true },
+      { "field": "account_age_days", "operator": "less_or_equal", "value": 14 }
+    ]
+  },
+  "exclusions": ["opted_out", "invalid_email", "account_suspended"]
+}

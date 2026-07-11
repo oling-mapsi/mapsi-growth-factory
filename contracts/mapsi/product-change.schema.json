@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProductChangeCollection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["changes"],
+  "properties": {
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["change_id", "version", "deployed_at", "capability_key", "summary"],
+        "properties": {
+          "change_id": {"type": "string"},
+          "version": {"type": "string"},
+          "deployed_at": {"type": "string", "format": "date-time"},
+          "capability_key": {"type": "string"},
+          "summary": {"type": "string"},
+          "audience_hint": {"type": "string"}
+        }
+      }
+    }
+  }
+}
