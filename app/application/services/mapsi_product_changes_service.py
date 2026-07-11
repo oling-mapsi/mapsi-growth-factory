@@ -51,23 +51,31 @@ class MapsiProductChangesService:
         changes: list[ProductChange] = []
         evidences: list[SourceEvidence] = []
         for item in payload.items:
+            summary = item.summary or item.user_value or item.functional_description or item.title
+            communicable = item.communicable if item.communicable is not None else (item.status == "production")
+            url = item.url or _build_github_url(self.repository_full_name, item.evidence)
+            published_at = item.published_at or item.deployed_at
+            tags = list(item.tags or [])
+            for value in ("product", item.module, item.status, *(item.audiences or [])):
+                if value and value not in tags:
+                    tags.append(value)
             change_id = str(uuid5(NAMESPACE_URL, f"{self.repository_full_name}:{item.id}"))
-            reference = item.url or item.id
-            pr_number = _parse_pr_number(item.url)
+            reference = url or item.id
+            pr_number = _parse_pr_number(url)
             change = ProductChange(
                 id=change_id,
                 repository_source_id=source.id,
                 repository_full_name=self.repository_full_name,
                 sha=item.id,
                 pr_number=pr_number,
-                deployment_ref=item.published_at or "",
+                deployment_ref=published_at or "",
                 production_status="production",
                 change_note_path=f"api/internal/growth/v1/product-changes#{item.id}",
-                eligible_for_communication=item.communicable,
+                eligible_for_communication=communicable,
                 confidential=False,
                 target_client_key="",
                 capability_key=item.id,
-                summary=item.summary,
+                summary=summary,
                 contract_version=payload.contract_version,
                 deployment_proven=True,
                 raw_payload={
@@ -85,9 +93,9 @@ class MapsiProductChangesService:
                     reference=reference,
                     payload={
                         "title": item.title,
-                        "url": item.url,
-                        "published_at": item.published_at,
-                        "tags": item.tags,
+                        "url": url,
+                        "published_at": published_at,
+                        "tags": tags,
                     },
                 )
             )
@@ -103,3 +111,15 @@ def _parse_pr_number(url: str | None) -> int | None:
         return int(url.rsplit("/pull/", 1)[1].split("/", 1)[0])
     except ValueError:
         return None
+
+
+def _build_github_url(repository_full_name: str, evidence: dict | None) -> str | None:
+    if not evidence:
+        return None
+    if evidence.get("pull_request"):
+        return f"https://github.com/{repository_full_name}/pull/{evidence['pull_request']}"
+    if evidence.get("issue"):
+        return f"https://github.com/{repository_full_name}/issues/{evidence['issue']}"
+    if evidence.get("commit_sha"):
+        return f"https://github.com/{repository_full_name}/commit/{evidence['commit_sha']}"
+    return None

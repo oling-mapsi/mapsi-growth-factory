@@ -88,3 +88,39 @@ def test_collect_product_changes_rejects_incompatible_contract_version(session) 
         assert "Incompatible MAPSI product changes contract version 2.0.0." == str(exc)
     else:
         raise AssertionError("Incompatible contract version was not rejected.")
+
+
+def test_collect_product_changes_accepts_prod_payload_shape(session) -> None:
+    payload = ProductChangeCollection.model_validate(
+        {
+            "contract_version": "1.0.0",
+            "generated_at": "2026-07-11T16:35:46-04:00",
+            "items": [
+                {
+                    "id": "MAPSI-2026-000",
+                    "title": "Export synthetique des activites Courbex",
+                    "module": "courbex",
+                    "status": "production",
+                    "audiences": ["manager", "administrator"],
+                    "user_value": "L utilisateur peut exporter un resume d activite Courbex.",
+                    "functional_description": "Un export dedie est disponible.",
+                    "availability": {"type": "all_customers"},
+                    "feature_flag": None,
+                    "minimum_version": "6.18.0",
+                    "deployed_at": None,
+                    "evidence": {"pull_request": 1842, "issue": 1720, "commit_sha": "301f950460747537677859e945900dd8cfb94caf"},
+                }
+            ],
+        }
+    )
+    service = build_service(session, payload)
+
+    count = service.collect(dry_run=False)
+
+    assert count == 1
+    change = session.query(ProductChangeModel).one()
+    evidence = session.query(SourceEvidenceModel).one()
+    assert change.summary == "L utilisateur peut exporter un resume d activite Courbex."
+    assert change.pr_number == 1842
+    assert change.eligible_for_communication is True
+    assert evidence.reference == "https://github.com/oling-mapsi/mapsi-v6/pull/1842"
