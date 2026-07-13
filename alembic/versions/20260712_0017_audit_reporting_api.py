@@ -22,6 +22,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    op.execute("DROP TRIGGER IF EXISTS audit_logs_no_update ON audit_logs;")
+    op.execute("DROP TRIGGER IF EXISTS audit_logs_no_delete ON audit_logs;")
     op.add_column("audit_logs", sa.Column("content_asset_id", sa.String(length=36), nullable=False, server_default=""))
     op.add_column("audit_logs", sa.Column("actor_id", sa.String(length=255), nullable=False, server_default=""))
     op.add_column("audit_logs", sa.Column("actor_source", sa.String(length=64), nullable=False, server_default="system"))
@@ -85,6 +87,23 @@ def upgrade() -> None:
             },
         )
         previous_hash = computed
+
+    op.execute(
+        """
+        CREATE TRIGGER audit_logs_no_update
+        BEFORE UPDATE ON audit_logs
+        FOR EACH ROW
+        EXECUTE FUNCTION prevent_audit_logs_mutation();
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER audit_logs_no_delete
+        BEFORE DELETE ON audit_logs
+        FOR EACH ROW
+        EXECUTE FUNCTION prevent_audit_logs_mutation();
+        """
+    )
 
 
 def downgrade() -> None:
