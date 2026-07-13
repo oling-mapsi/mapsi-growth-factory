@@ -35,7 +35,15 @@ class CampaignService:
         )
         campaign.audience_segments.append(segment)
         saved = self.repository.add(campaign)
-        self.audit_log.append(saved.id, "campaign.created", {"status": saved.status.value})
+        self.audit_log.append(
+            saved.id,
+            "campaign.created",
+            {"objective": saved.objective, "audience_segment_id": segment.id},
+            actor_source="system",
+            previous_state={},
+            new_state={"status": saved.status.value},
+            result="SUCCESS",
+        )
         self.task_queue.enqueue("campaign.notify_created", {"campaign_id": saved.id})
         return saved
 
@@ -56,7 +64,15 @@ class CampaignService:
         campaign.mark_generated(brief, assets)
         campaign.source_evidences.extend(evidence)
         saved = self.repository.save(campaign)
-        self.audit_log.append(saved.id, "campaign.generated", {"assets": len(saved.content_assets)})
+        self.audit_log.append(
+            saved.id,
+            "campaign.generated",
+            {"assets": len(saved.content_assets), "evidence_count": len(saved.source_evidences)},
+            actor_source="system",
+            previous_state={"status": "DRAFT"},
+            new_state={"status": saved.status.value},
+            result="SUCCESS",
+        )
         self.task_queue.enqueue(
             "campaign.prepare_review_bundle",
             {"campaign_id": saved.id, "asset_count": len(saved.content_assets)},
@@ -65,9 +81,19 @@ class CampaignService:
 
     def request_changes(self, campaign_id: str, command: ReviewCampaignCommand) -> CampaignRun:
         campaign = self.get_campaign(campaign_id)
+        previous_status = campaign.status.value
         decision = campaign.request_changes(command.comment, command.decided_by)
         saved = self.repository.save(campaign)
-        self.audit_log.append(saved.id, "campaign.changes_requested", {"decision_id": decision.id})
+        self.audit_log.append(
+            saved.id,
+            "campaign.changes_requested",
+            {"decision_id": decision.id},
+            actor_id=command.decided_by,
+            actor_source="review_portal",
+            previous_state={"status": previous_status},
+            new_state={"status": saved.status.value},
+            result="SUCCESS",
+        )
         self.task_queue.enqueue(
             "campaign.rework_assets",
             {"campaign_id": saved.id, "revision": max(asset.revision for asset in saved.content_assets)},
@@ -76,22 +102,43 @@ class CampaignService:
 
     def approve(self, campaign_id: str, command: ReviewCampaignCommand) -> CampaignRun:
         campaign = self.get_campaign(campaign_id)
+        previous_status = campaign.status.value
         decision = campaign.approve(command.comment, command.decided_by)
         saved = self.repository.save(campaign)
-        self.audit_log.append(saved.id, "campaign.approved", {"decision_id": decision.id})
+        self.audit_log.append(
+            saved.id,
+            "campaign.approved",
+            {"decision_id": decision.id},
+            actor_id=command.decided_by,
+            actor_source="review_portal",
+            previous_state={"status": previous_status},
+            new_state={"status": saved.status.value},
+            result="SUCCESS",
+        )
         self.task_queue.enqueue("campaign.notify_approved", {"campaign_id": saved.id})
         return saved
 
     def reject(self, campaign_id: str, command: ReviewCampaignCommand) -> CampaignRun:
         campaign = self.get_campaign(campaign_id)
+        previous_status = campaign.status.value
         decision = campaign.reject(command.comment, command.decided_by)
         saved = self.repository.save(campaign)
-        self.audit_log.append(saved.id, "campaign.rejected", {"decision_id": decision.id})
+        self.audit_log.append(
+            saved.id,
+            "campaign.rejected",
+            {"decision_id": decision.id},
+            actor_id=command.decided_by,
+            actor_source="review_portal",
+            previous_state={"status": previous_status},
+            new_state={"status": saved.status.value},
+            result="SUCCESS",
+        )
         self.task_queue.enqueue("campaign.archive_draft", {"campaign_id": saved.id})
         return saved
 
     def publish(self, campaign_id: str, command: PublishCampaignCommand) -> CampaignRun:
         campaign = self.get_campaign(campaign_id)
+        previous_status = campaign.status.value
         if self.review_portal is not None:
             self.review_portal.ensure_publishable(campaign_id)
         for channel in command.channels:
@@ -112,6 +159,10 @@ class CampaignService:
             saved.id,
             "campaign.published",
             {"channels": command.channels, "publication_count": len(saved.publications)},
+            actor_source="system",
+            previous_state={"status": previous_status},
+            new_state={"status": saved.status.value},
+            result="SUCCESS",
         )
         self.task_queue.enqueue(
             "campaign.refresh_publication_metrics",

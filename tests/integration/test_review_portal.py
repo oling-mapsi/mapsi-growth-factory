@@ -128,3 +128,63 @@ def test_campaign_already_sent_blocks_review_actions(client, session) -> None:
     )
 
     assert response.status_code == 409
+
+
+def test_review_portal_readonly_keeps_consultation_and_redirects_writes_to_studio(client, session, monkeypatch) -> None:
+    _, _, token = seed_review(session)
+    settings = __import__("app.core.config", fromlist=["get_settings"]).get_settings()
+    monkeypatch.setattr(settings, "review_portal_mode", "readonly")
+    monkeypatch.setattr(settings, "review_portal_studio_url", "https://studio.mapsi.test/growth")
+
+    view = client.get(f"/review/{token}", headers=auth_headers())
+    edit = client.post(
+        f"/review/{token}/approve",
+        headers=auth_headers(),
+        follow_redirects=False,
+    )
+
+    assert view.status_code == 200
+    assert "Lecture seule" in view.text
+    assert "disabled" in view.text
+    assert edit.status_code == 303
+    assert edit.headers["location"] == "https://studio.mapsi.test/growth"
+
+
+def test_review_portal_emergency_only_requires_allowlist_and_emergency_key(client, session, monkeypatch) -> None:
+    campaign, _, token = seed_review(session)
+    settings = __import__("app.core.config", fromlist=["get_settings"]).get_settings()
+    monkeypatch.setattr(settings, "review_portal_mode", "emergency-only")
+    monkeypatch.setattr(settings, "review_portal_emergency_allowlist", "admin")
+    monkeypatch.setattr(settings, "review_portal_emergency_key", "emergency-secret")
+
+    denied = client.get(f"/review/{token}", headers=auth_headers("admin"))
+    allowed = client.get(
+        f"/review/{token}",
+        headers={**auth_headers("admin"), "X-Review-Emergency-Key": "emergency-secret"},
+    )
+
+    assert denied.status_code == 403
+    assert allowed.status_code == 200
+    assert "Emergency access only" in allowed.text
+    latest = SqlAlchemyAuditLogRepository(session).latest_event_for_campaign(campaign.id)
+    assert latest is not None
+    assert latest.event_type == "review.portal_emergency_access_granted"
+
+
+def test_review_portal_disabled_shows_moved_page_and_blocks_decisions(client, session, monkeypatch) -> None:
+    _, _, token = seed_review(session)
+    settings = __import__("app.core.config", fromlist=["get_settings"]).get_settings()
+    monkeypatch.setattr(settings, "review_portal_mode", "disabled")
+    monkeypatch.setattr(settings, "review_portal_studio_url", "https://studio.mapsi.test/growth")
+
+    view = client.get(f"/review/{token}", headers=auth_headers())
+    write = client.post(
+        f"/review/{token}/approve",
+        headers=auth_headers(),
+        follow_redirects=False,
+    )
+
+    assert view.status_code == 200
+    assert "Administration Moved" in view.text or "Review Portal Disabled" in view.text
+    assert "MAPSI Studio" in view.text
+    assert write.status_code == 200 or write.status_code == 303

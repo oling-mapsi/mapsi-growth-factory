@@ -9,7 +9,7 @@ from app.application.services.review_portal_service import ReviewPortalService
 from app.core.config import get_settings
 from app.domain.entities import AudienceSegment, CampaignReview, CampaignRun, ContentAsset, SourceEvidence
 from app.domain.enums import AssetStatus, CampaignStatus
-from app.domain.errors import CampaignPublicationForbiddenError, ExternalConnectorError
+from app.domain.errors import CampaignPublicationForbiddenError, EmergencyStopActiveError, ExternalConnectorError
 from app.infrastructure.connectors.oling import OlingConnector, build_oling_config
 from app.infrastructure.connectors import oling as oling_connector_module
 from app.infrastructure.repositories.audit import SqlAlchemyAuditLogRepository
@@ -97,6 +97,12 @@ def test_oling_publish_and_preview_are_persisted(session, monkeypatch) -> None:
     assert stored.public_url == "https://www.oling.fr/ressources/article-oling"
     assert stored.published_revision_number == 1
     assert stored.published_content_version == 1
+    assert stored.publication_mode_requested == "publish"
+    assert stored.publication_mode_executed == "live"
+    assert stored.publisher_type == "oling_api"
+    assert stored.publication_status == "PUBLISHED"
+    assert asset.status is AssetStatus.PUBLISHED
+    assert asset.external_publication_url == "https://www.oling.fr/ressources/article-oling"
 
 
 def test_oling_publish_is_idempotent_for_same_asset_hash(session) -> None:
@@ -109,6 +115,21 @@ def test_oling_publish_is_idempotent_for_same_asset_hash(session) -> None:
     second = publisher.publish(campaign, asset)
 
     assert first.external_reference == second.external_reference
+    assert len(STATE["articles"]) == 1
+
+
+def test_oling_publish_reuses_existing_result_for_same_hash(session) -> None:
+    get_settings.cache_clear()
+    publisher = build_publisher(session)
+    campaign = seed_campaign(session)
+    asset = campaign.content_assets[0]
+
+    first = publisher.publish_asset(campaign.id, asset.id, idempotency_key="oling-1")
+    second = publisher.publish_asset(campaign.id, asset.id, idempotency_key="oling-2")
+
+    assert first["details"]["publication_status"] == "PUBLISHED"
+    assert second["details"]["publication_status"] == "PUBLISHED"
+    assert second["details"]["idempotency_key"] == "oling-1"
     assert len(STATE["articles"]) == 1
 
 
@@ -157,6 +178,41 @@ def test_oling_preview_only_mode_blocks_public_publish(session) -> None:
     assert preview["preview_url"].startswith("http://testserver/preview/ressources/")
 
 
+def test_oling_dry_run_exposes_requested_and_executed_modes(session) -> None:
+    get_settings.cache_clear()
+    publisher = build_publisher(session)
+    campaign = seed_campaign(session)
+
+    result = publisher.publish_asset(campaign.id, campaign.content_assets[0].id, dry_run=True)
+
+    assert result["preview"]["publication_mode_requested"] == "dry_run"
+    assert result["preview"]["publication_mode_executed"] == "preview"
+    assert result["preview"]["publisher_type"] == "oling_api"
+
+
+def test_oling_mock_mode_marks_sandbox_execution(session) -> None:
+    get_settings.cache_clear()
+    publisher = build_publisher(session, mode="mock")
+    campaign = seed_campaign(session)
+    asset = campaign.content_assets[0]
+
+    result = publisher.publish_asset(campaign.id, asset.id, idempotency_key="sandbox-1")
+
+    assert result["details"]["publication_mode_executed"] == "sandbox"
+    assert result["details"]["publisher_type"] == "oling_mock"
+    assert result["details"]["publication_status"] == "PUBLISHED"
+
+
+def test_oling_publish_blocks_when_kill_switch_enabled(session) -> None:
+    get_settings.cache_clear()
+    publisher = build_publisher(session)
+    publisher.settings.workflow_kill_switch = True
+    campaign = seed_campaign(session)
+
+    with pytest.raises(EmergencyStopActiveError):
+        publisher.publish(campaign, campaign.content_assets[0])
+
+
 def test_oling_invalid_auth_does_not_log_token(session, caplog) -> None:
     get_settings.cache_clear()
     publisher = build_publisher(session)
@@ -180,6 +236,52 @@ def test_oling_server_errors_trigger_circuit_breaker(session) -> None:
         publisher.create_preview(campaign, campaign.content_assets[0])
     with pytest.raises(ExternalConnectorError):
         publisher.create_preview(campaign, campaign.content_assets[0])
+
+
+def test_oling_publish_failure_marks_asset_failed(session) -> None:
+    get_settings.cache_clear()
+    publisher = build_publisher(session)
+    campaign = seed_campaign(session)
+    asset = campaign.content_assets[0]
+
+    def failing_publish(*args, **kwargs):
+        raise ExternalConnectorError("publish failed")
+
+    publisher.connector.publish = failing_publish
+
+    with pytest.raises(ExternalConnectorError):
+        publisher.publish(campaign, asset, idempotency_key="fail-1")
+
+    refreshed = SqlAlchemyCampaignRepository(session).get(campaign.id)
+    stored = OlingNewsPublicationRepository(session).get_latest_for_asset(asset.id)
+    assert refreshed is not None
+    assert stored is not None
+    assert refreshed.content_assets[0].status is AssetStatus.FAILED
+    assert stored.publication_status == "FAILED"
+
+
+def test_oling_publish_timeout_after_remote_success_is_reconciled(session) -> None:
+    get_settings.cache_clear()
+    publisher = build_publisher(session)
+    campaign = seed_campaign(session)
+    asset = campaign.content_assets[0]
+
+    def timeout_after_remote_publish(external_id: str, *, correlation_id: str):
+        article = STATE["articles"][external_id]
+        article["published_revision_number"] = article["draft_revision_number"]
+        article["publication_status"] = "published"
+        article["published_at"] = datetime.now(UTC).replace(microsecond=0).isoformat()
+        raise ExternalConnectorError("timeout")
+
+    publisher.connector.publish = timeout_after_remote_publish
+
+    result = publisher.publish_asset(campaign.id, asset.id, idempotency_key="timeout-1")
+    stored = OlingNewsPublicationRepository(session).get_latest_for_asset(asset.id)
+
+    assert result["details"]["publication_status"] == "PUBLISHED"
+    assert stored is not None
+    assert stored.publication_status == "PUBLISHED"
+    assert stored.idempotency_key == "timeout-1"
 
 
 def test_publish_asset_dry_run_returns_preview(session) -> None:

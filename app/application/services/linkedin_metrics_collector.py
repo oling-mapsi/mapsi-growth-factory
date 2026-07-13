@@ -54,5 +54,12 @@ class LinkedInMetricsCollector:
             )
             collected += 1
         self.campaign_repository.save(campaign)
-        self.audit_log.append(campaign.id, "campaign.linkedin_metrics_collected", {"count": collected})
+        self.audit_log.append(
+            campaign.id,
+            "publication.metrics_collected",
+            {"count": collected},
+            actor_source="system",
+            channel="linkedin",
+            result="SUCCESS",
+        )
         return {"campaign_id": campaign.id, "collected": collected}

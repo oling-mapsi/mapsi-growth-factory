@@ -55,6 +55,10 @@ class OlingNewsPublicationRepository:
         model.content_hash = publication.content_hash
         model.status = publication.status
         model.mode = publication.mode
+        model.publication_mode_requested = publication.publication_mode_requested
+        model.publication_mode_executed = publication.publication_mode_executed
+        model.publisher_type = publication.publisher_type
+        model.publication_status = publication.publication_status
         model.idempotency_key = publication.idempotency_key
         model.preview_url = publication.preview_url
         model.public_url = publication.public_url
@@ -81,6 +85,10 @@ class OlingNewsPublicationRepository:
             content_hash=model.content_hash,
             status=model.status,
             mode=model.mode,
+            publication_mode_requested=model.publication_mode_requested,
+            publication_mode_executed=model.publication_mode_executed,
+            publisher_type=model.publisher_type,
+            publication_status=model.publication_status,
             idempotency_key=model.idempotency_key,
             preview_url=model.preview_url,
             public_url=model.public_url,

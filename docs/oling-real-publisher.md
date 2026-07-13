@@ -110,6 +110,30 @@ Effet :
 3. laisser `PUBLISH_OLING_ENABLED=false`
 4. valider d'abord avec `OLING_MODE=mock` ou `OLING_MODE=preview-only`
 5. verifier la commande CLI `publish-asset --dry-run`
+
+## MGF-401 - Cohérence d'état de publication
+
+Cause :
+- le statut publie etait persiste cote `oling_news_publications`, mais pas resynchronise de facon fiable sur l'asset et la campagne lors d'un `publish-asset` direct ;
+- `mode` restait celui du draft initial, meme apres une publication reelle reussie ;
+- le rejeu idempotent retournait un resultat partiel sans revalider l'etat metier publie.
+
+Correctif :
+- ajout des champs persistés `publication_mode_requested`, `publication_mode_executed`, `publisher_type`, `publication_status` ;
+- synchronisation metier asset/campagne/publication apres succes, rejeu et reconciliation apres erreur reseau ;
+- commande CLI `diagnose-asset` pour inspecter l'etat Oling complet d'un asset.
+
+Migration :
+- alembic `20260712_0014_oling_publication_state_consistency` ajoute les nouveaux champs et backfill les lignes existantes.
+
+Comportement apres rejeu :
+- si la meme version de contenu est deja publiee, aucun second publish distant n'est emis ;
+- le resultat publie existant est renvoye avec le meme identifiant externe, la meme URL et la meme cle d'idempotence persistée.
+
+Rollback :
+- revenir au code precedent ;
+- executer le downgrade Alembic `20260712_0013` pour retirer les nouveaux champs si necessaire ;
+- les anciennes colonnes `status` et `mode` restent conservees pendant cette PR pour limiter le risque de retour arriere.
 6. basculer eventuellement `OLING_MODE=live`
 7. n'activer `PUBLISH_OLING_ENABLED=true` qu'apres validation complete
 

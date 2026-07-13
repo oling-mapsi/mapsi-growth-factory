@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
 
@@ -145,6 +145,38 @@ class AgentExecutionRecord(StrictModel):
     temperature: float = Field(default=0.0)
 
 
+class EditorialTokenUsage(StrictModel):
+    input_tokens: StrictInt = 0
+    output_tokens: StrictInt = 0
+    total_tokens: StrictInt = 0
+
+
+class EditorialExecutionMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent_name: str
+    provider_type: Literal["simulated", "openai", "fake"]
+    model_name: str
+    prompt_version: str
+    schema_name: str
+    schema_version: str = "v1"
+    execution_params: dict[str, Any] = Field(default_factory=dict)
+    token_usage: EditorialTokenUsage = Field(default_factory=EditorialTokenUsage)
+
+
+class EditorialEvaluationResult(StrictModel):
+    name: StrictStr
+    passed: StrictBool
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class EditorialConsumptionSummary(StrictModel):
+    budget_tokens: StrictInt
+    used_tokens: StrictInt
+    remaining_tokens: StrictInt
+    mode: Literal["simulated", "real"]
+
+
 class BenefitClaim(StrictModel):
     statement: StrictStr
     claim_type: Literal["demonstrated", "expected"]
@@ -161,10 +193,15 @@ class MarketEditorialStrategyInput(StrictModel):
 
 class MarketChannelPlan(StrictModel):
     asset_type: Literal[
+        "mapsi_user_email",
         "prospect_newsletter",
         "linkedin_company_post",
         "linkedin_personal_draft",
         "website_article",
+        "oling_news_article",
+        "mapsi_news_article",
+        "mapsi_studio_news",
+        "mapsi_studio_tip",
         "website_cta",
         "demonstration_landing_page",
     ]
@@ -234,3 +271,55 @@ class SeoQualityInput(StrictModel):
 class SeoQualityOutput(StrictModel):
     passed: StrictBool
     issues: list[QualityIssue]
+
+
+class MapsiMarketEditorialBrief(StrictModel):
+    selected_topic: StrictStr
+    objective: StrictStr
+    product_change_ids: list[StrictStr]
+    source_evidence_ids: list[StrictStr]
+    target_personas: list[StrictStr]
+    market_problem: StrictStr
+    key_messages: list[StrictStr]
+    oling_angle: StrictStr
+    mapsi_angle: StrictStr
+    linkedin_angle: StrictStr
+    primary_cta: StrictStr
+    canonical_article_target: Literal["oling.fr", "mapsi.fr"]
+    risks: list[StrictStr]
+    prohibited_claims: list[StrictStr]
+
+
+class OlingPracticeEditorialBrief(StrictModel):
+    practice: StrictStr
+    business_problem: StrictStr
+    project_context: StrictStr
+    anonymization_required: StrictBool
+    authorized_client_name: StrictStr = ""
+    approach: StrictStr
+    deliverables: list[StrictStr]
+    lessons_learned: list[StrictStr]
+    demonstrated_results: list[StrictStr]
+    unverified_claims_to_exclude: list[StrictStr]
+    target_personas: list[StrictStr]
+    article_angle: StrictStr
+    linkedin_angle: StrictStr
+    CTA: StrictStr
+    source_evidence_ids: list[StrictStr]
+
+
+class MapsiUserWeeklyEmailContent(StrictModel):
+    email_type: Literal["NEW_FEATURE", "FEATURE_REMINDER", "TIP", "ONBOARDING", "REACTIVATION", "WORKFLOW_GUIDE"]
+    subject: StrictStr
+    preheader: StrictStr
+    title: StrictStr
+    introduction: StrictStr
+    main_tip: StrictStr
+    steps: list[StrictStr]
+    expected_benefit: StrictStr
+    call_to_action: StrictStr
+    deep_link: StrictStr = ""
+    body_html: StrictStr
+    body_text: StrictStr
+    source_evidence_ids: list[StrictStr]
+    target_segment_id: StrictStr

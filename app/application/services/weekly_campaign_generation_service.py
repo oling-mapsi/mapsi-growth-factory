@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from collections import Counter
-
 from app.application.models.editorial_agents import (
-    AgentExecutionRecord,
+    EditorialConsumptionSummary,
+    EditorialEvaluationResult,
     CustomerEmailWriterInput,
     EditorialStrategyInput,
     EnabledSegmentReference,
@@ -20,12 +19,14 @@ from app.application.models.editorial_agents import (
 from app.application.services.audience_segmentation_service import AudienceSegmentationService
 from app.application.services.editorial_agents import (
     CustomerEmailWriterAgent,
+    detect_editorial_policy_violations,
+    EditorialQualityAgent,
     EditorialStrategyAgent,
-    ProductIntelligenceAgent,
-    QualityControlAgent,
+    ProductChangeAnalyst,
     UsageIntelligenceAgent,
     contains_pii,
 )
+from app.core.config import get_settings
 from app.domain.errors import EditorialGenerationBlockedError
 from app.infrastructure.observability import incr, structured_log
 from app.infrastructure.repositories.editorial_pipeline import EditorialPipelineRepository
@@ -35,11 +36,11 @@ class WeeklyCampaignGenerationService:
     def __init__(
         self,
         *,
-        product_agent: ProductIntelligenceAgent,
+        product_agent: ProductChangeAnalyst,
         usage_agent: UsageIntelligenceAgent,
         strategy_agent: EditorialStrategyAgent,
         writer_agent: CustomerEmailWriterAgent,
-        quality_agent: QualityControlAgent,
+        quality_agent: EditorialQualityAgent,
         segmentation_service: AudienceSegmentationService,
         repository: EditorialPipelineRepository,
     ) -> None:
@@ -50,6 +51,8 @@ class WeeklyCampaignGenerationService:
         self.quality_agent = quality_agent
         self.segmentation_service = segmentation_service
         self.repository = repository
+        self.max_budget_tokens = get_settings().editorial_generation_max_budget_tokens
+        self._consumed_tokens = 0
 
     def generate(self, dry_run: bool = True) -> dict:
         product_changes = self.repository.list_communicable_product_changes()
@@ -158,14 +161,31 @@ class WeeklyCampaignGenerationService:
             "email": email_output.model_dump(mode="json"),
             "quality": qc_output.model_dump(mode="json"),
             "evaluations": evaluations,
+            "engine": {
+                "mode": self._engine_mode(),
+                "consumption": self._consumption().model_dump(mode="json"),
+            },
         }
 
     def _log_agent(self, agent, input_model, output_model) -> None:
+        metadata = agent.last_execution
+        if metadata is None:
+            raise EditorialGenerationBlockedError("Missing editorial execution metadata.")
+        self._consumed_tokens += metadata.token_usage.total_tokens
+        if self._consumed_tokens > self.max_budget_tokens:
+            raise EditorialGenerationBlockedError("Editorial generation budget exceeded.")
         self.repository.log_agent_execution(
             agent_name=agent.agent_name,
-            model_name=agent.model_name,
-            prompt_version=agent.prompt_version,
-            execution_params={"temperature": agent.temperature},
+            model_name=metadata.model_name,
+            prompt_version=metadata.prompt_version,
+            execution_params={
+                "temperature": agent.temperature,
+                "provider_type": metadata.provider_type,
+                "schema_name": metadata.schema_name,
+                "schema_version": metadata.schema_version,
+                "token_usage": metadata.token_usage.model_dump(mode="json"),
+                "engine_mode": self._engine_mode(),
+            },
             input_payload=input_model.model_dump(mode="json"),
             output_payload=output_model.model_dump(mode="json"),
         )
@@ -200,6 +220,8 @@ class WeeklyCampaignGenerationService:
         issues = list(qc.issues)
         if contains_pii(email.model_dump(mode="json")):
             issues.append(QualityIssue(code="no_pii", message="Personal data detected.", severity="error"))
+        for code in detect_editorial_policy_violations(email.model_dump(mode="json")):
+            issues.append(QualityIssue(code=code, message=f"Editorial policy violation: {code}.", severity="error"))
         if strategy.audience_segment_id not in {segment.segment_id for segment in enabled_segments}:
             issues.append(QualityIssue(code="audience_enabled", message="Audience segment is not enabled.", severity="error"))
         if any(not evidence_index[evidence_id].deployed for evidence_id in strategy.evidence_ids):
@@ -210,12 +232,31 @@ class WeeklyCampaignGenerationService:
         return QualityControlOutput(passed=passed, issues=issues)
 
     def _evaluate(self, strategy, email, qc, evidence_index, enabled_segments, theme_history) -> dict:
-        return {
-            "exactitude": all(evidence_id in evidence_index for evidence_id in strategy.evidence_ids),
-            "absence_of_personal_data": not contains_pii(email.model_dump(mode="json")),
-            "evidence_compliance": set(email.evidence_ids).issubset(set(strategy.evidence_ids)),
-            "audience_coherence": strategy.audience_segment_id in {segment.segment_id for segment in enabled_segments},
-            "non_repetition": strategy.topic.casefold() not in {item.topic.casefold() for item in theme_history},
-            "ton_oling": "!" not in email.subject and "!" not in email.headline,
-            "quality_passed": qc.passed,
-        }
+        evaluations = [
+            EditorialEvaluationResult(name="exactitude", passed=all(evidence_id in evidence_index for evidence_id in strategy.evidence_ids)),
+            EditorialEvaluationResult(name="absence_of_personal_data", passed=not contains_pii(email.model_dump(mode="json"))),
+            EditorialEvaluationResult(name="evidence_compliance", passed=set(email.evidence_ids).issubset(set(strategy.evidence_ids))),
+            EditorialEvaluationResult(name="audience_coherence", passed=strategy.audience_segment_id in {segment.segment_id for segment in enabled_segments}),
+            EditorialEvaluationResult(name="non_repetition", passed=strategy.topic.casefold() not in {item.topic.casefold() for item in theme_history}),
+            EditorialEvaluationResult(name="ton_oling", passed="!" not in email.subject and "!" not in email.headline),
+            EditorialEvaluationResult(name="quality_passed", passed=qc.passed),
+            EditorialEvaluationResult(
+                name="policy_compliance",
+                passed=not detect_editorial_policy_violations(email.model_dump(mode="json")),
+                details={"violations": detect_editorial_policy_violations(email.model_dump(mode="json"))},
+            ),
+        ]
+        return {item.name: {"passed": item.passed, **({"details": item.details} if item.details else {})} for item in evaluations}
+
+    def _consumption(self) -> EditorialConsumptionSummary:
+        remaining = max(0, self.max_budget_tokens - self._consumed_tokens)
+        return EditorialConsumptionSummary(
+            budget_tokens=self.max_budget_tokens,
+            used_tokens=self._consumed_tokens,
+            remaining_tokens=remaining,
+            mode=self._engine_mode(),
+        )
+
+    def _engine_mode(self) -> str:
+        provider_type = getattr(self.product_agent.last_execution, "provider_type", "")
+        return "real" if provider_type == "openai" else "simulated"

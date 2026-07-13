@@ -12,6 +12,7 @@ from app.domain.errors import (
     ApprovalPrerequisiteError,
     CampaignPublicationForbiddenError,
     InvalidStateTransitionError,
+    OptimisticLockError,
 )
 
 
@@ -179,6 +180,45 @@ class ContentAsset:
         self.approved_by = ""
         self.approved_at = None
         self.status = AssetStatus.CHANGES_REQUESTED
+
+    def assert_expected_version(self, expected_version: int) -> None:
+        if self.content_version != expected_version:
+            raise OptimisticLockError(
+                f"Asset {self.id} version mismatch: expected {expected_version}, current {self.content_version}."
+            )
+
+    def update_draft(
+        self,
+        *,
+        title: str | None = None,
+        subject: str | None = None,
+        content_html: str | None = None,
+        content_text: str | None = None,
+        excerpt: str | None = None,
+        call_to_action: str | None = None,
+        target_url: str | None = None,
+    ) -> None:
+        self.content_version += 1
+        self.revision = self.content_version
+        if title is not None:
+            self.title = title
+        if subject is not None:
+            self.subject = subject
+        if content_html is not None:
+            self.content_html = content_html
+            self.body = content_html
+        if content_text is not None:
+            self.content_text = content_text
+        if excerpt is not None:
+            self.excerpt = excerpt
+        if call_to_action is not None:
+            self.call_to_action = call_to_action
+        if target_url is not None:
+            self.target_url = target_url
+        self.last_error = ""
+        self.ensure_content_hash()
+        if self.status not in {AssetStatus.PUBLISHED, AssetStatus.CANCELLED}:
+            self.status = AssetStatus.READY_FOR_REVIEW
 
     def mark_scheduled(self) -> None:
         self.status = AssetStatus.SCHEDULED
@@ -548,6 +588,38 @@ class OlingNewsPublication:
     content_hash: str = ""
     status: str = "draft"
     mode: str = "mock"
+    publication_mode_requested: str = ""
+    publication_mode_executed: str = ""
+    publisher_type: str = ""
+    publication_status: str = "DRAFT"
+    idempotency_key: str = ""
+    preview_url: str = ""
+    public_url: str = ""
+    public_slug: str = ""
+    draft_revision_number: int | None = None
+    published_revision_number: int | None = None
+    published_content_version: int | None = None
+    published_at: datetime | None = None
+    unpublished_at: datetime | None = None
+    last_error: str = ""
+    metrics: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=utcnow)
+    updated_at: datetime = field(default_factory=utcnow)
+
+
+@dataclass
+class MapsiNewsPublication:
+    id: str = field(default_factory=lambda: str(uuid4()))
+    campaign_run_id: str = ""
+    content_asset_id: str = ""
+    external_id: str = ""
+    content_hash: str = ""
+    status: str = "draft"
+    mode: str = "mock"
+    publication_mode_requested: str = ""
+    publication_mode_executed: str = ""
+    publisher_type: str = ""
+    publication_status: str = "DRAFT"
     idempotency_key: str = ""
     preview_url: str = ""
     public_url: str = ""
@@ -568,6 +640,12 @@ class CampaignRun:
     id: str = field(default_factory=lambda: str(uuid4()))
     name: str = ""
     objective: str = ""
+    campaign_type: str = ""
+    weekly_pack_id: str = ""
+    week_reference: str = ""
+    week_year: int = 0
+    week_number: int = 0
+    pilot_mode: bool = False
     status: CampaignStatus = CampaignStatus.DRAFT
     created_at: datetime = field(default_factory=utcnow)
     updated_at: datetime = field(default_factory=utcnow)
@@ -590,15 +668,24 @@ class CampaignRun:
         published_assets = [asset for asset in self.content_assets if asset.status is AssetStatus.PUBLISHED]
         active_assets = [asset for asset in self.content_assets if asset.status is not AssetStatus.CANCELLED]
         approved_assets = [asset for asset in active_assets if asset.status in {AssetStatus.APPROVED, AssetStatus.SCHEDULED, AssetStatus.PUBLISHING, AssetStatus.PUBLISHED}]
+        reviewable_assets = [asset for asset in active_assets if asset.status in {AssetStatus.READY_FOR_REVIEW, AssetStatus.QUALITY_CHECK, AssetStatus.CHANGES_REQUESTED, AssetStatus.DRAFT}]
+        failed_assets = [asset for asset in active_assets if asset.status is AssetStatus.FAILED]
         if published_assets:
             if active_assets and len(published_assets) == len(active_assets):
                 self.status = CampaignStatus.PUBLISHED
             else:
                 self.status = CampaignStatus.PARTIALLY_PUBLISHED
         elif approved_assets:
-            self.status = CampaignStatus.APPROVED
+            if active_assets and len(approved_assets) == len(active_assets):
+                self.status = CampaignStatus.APPROVED
+            else:
+                self.status = CampaignStatus.PARTIALLY_APPROVED
         elif any(asset.status is AssetStatus.CHANGES_REQUESTED for asset in active_assets):
             self.status = CampaignStatus.CHANGES_REQUESTED
+        elif reviewable_assets:
+            self.status = CampaignStatus.READY_FOR_REVIEW
+        elif failed_assets:
+            self.status = CampaignStatus.FAILED
         elif self.content_assets:
             self.status = CampaignStatus.GENERATED
         self.updated_at = utcnow()
@@ -612,7 +699,17 @@ class CampaignRun:
         self.updated_at = utcnow()
 
     def mark_generated(self, brief: EditorialBrief, assets: list[ContentAsset]) -> None:
-        self._transition_to(CampaignStatus.GENERATED, {CampaignStatus.DRAFT, CampaignStatus.CHANGES_REQUESTED})
+        self._transition_to(
+            CampaignStatus.GENERATED,
+            {
+                CampaignStatus.DRAFT,
+                CampaignStatus.CHANGES_REQUESTED,
+                CampaignStatus.NOT_STARTED,
+                CampaignStatus.SOURCES_READY,
+                CampaignStatus.GENERATING,
+                CampaignStatus.FAILED,
+            },
+        )
         self.editorial_briefs = [brief]
         self.content_assets = [
             ContentAsset(
@@ -735,6 +832,32 @@ class CampaignRun:
         self._sync_status_from_assets()
         return decision
 
+    def reject_asset(self, asset_id: str, comment: str, decided_by: str) -> ApprovalDecision:
+        asset = self._find_asset(asset_id)
+        asset.request_changes()
+        decision = ApprovalDecision(
+            campaign_run_id=self.id,
+            decision=CampaignStatus.REJECTED.value,
+            decided_by=decided_by,
+            comment=comment,
+        )
+        self.approval_decisions.append(decision)
+        self._sync_status_from_assets()
+        return decision
+
+    def request_asset_regeneration(self, asset_id: str, comment: str, decided_by: str) -> ApprovalDecision:
+        asset = self._find_asset(asset_id)
+        asset.request_changes()
+        decision = ApprovalDecision(
+            campaign_run_id=self.id,
+            decision="REGENERATION_REQUESTED",
+            decided_by=decided_by,
+            comment=comment,
+        )
+        self.approval_decisions.append(decision)
+        self._sync_status_from_assets()
+        return decision
+
     def reject(self, comment: str, decided_by: str) -> ApprovalDecision:
         self._transition_to(
             CampaignStatus.REJECTED,
@@ -797,6 +920,96 @@ class CampaignReview:
     approved_at: datetime | None = None
     rejected_at: datetime | None = None
     rejected_by: str = ""
+
+
+@dataclass
+class WeeklyCommunicationPack:
+    id: str = field(default_factory=lambda: str(uuid4()))
+    week_reference: str = ""
+    year: int = 0
+    week_number: int = 0
+    status: str = "NOT_STARTED"
+    created_at: datetime = field(default_factory=utcnow)
+    generated_at: datetime | None = None
+    reviewed_at: datetime | None = None
+    completed_at: datetime | None = None
+    campaign_ids: list[str] = field(default_factory=list)
+    global_summary: dict[str, Any] = field(default_factory=dict)
+    operational_errors: list[dict[str, Any]] = field(default_factory=list)
+    pilot_mode: bool = False
+
+
+@dataclass
+class FeatureCommunicationCatalogEntry:
+    feature_id: str = ""
+    module: str = ""
+    title: str = ""
+    functional_description: str = ""
+    user_benefit: str = ""
+    target_roles: list[str] = field(default_factory=list)
+    target_modules: list[str] = field(default_factory=list)
+    minimum_version: str = ""
+    availability: str = "general"
+    deep_link_template: str = ""
+    communication_priority: int = 100
+    last_communicated_at: datetime | None = None
+    minimum_repeat_delay: int = 14
+    source_evidence_ids: list[str] = field(default_factory=list)
+    enabled: bool = True
+
+
+@dataclass
+class EditorialSourceAttachmentReference:
+    id: str = field(default_factory=lambda: str(uuid4()))
+    source_item_id: str = ""
+    file_name: str = ""
+    media_type: str = ""
+    storage_reference: str = ""
+    source_url: str = ""
+    content_hash: str = ""
+    created_at: datetime = field(default_factory=utcnow)
+
+
+@dataclass
+class EditorialSourceItem:
+    id: str = field(default_factory=lambda: str(uuid4()))
+    source_pack_id: str = ""
+    source_type: str = "MANUAL_NOTE"
+    source_reference: str = ""
+    source_title: str = ""
+    source_date: datetime | None = None
+    source_author: str = ""
+    factual_summary: str = ""
+    usable_facts: list[str] = field(default_factory=list)
+    anonymized_facts: list[str] = field(default_factory=list)
+    prohibited_facts: list[str] = field(default_factory=list)
+    client_name: str = ""
+    client_name_usage_authorized: bool = False
+    confidentiality_level: str = "INTERNAL"
+    evidence_quality: str = "medium"
+    source_url: str = ""
+    external_source_id: str = ""
+    content_hash: str = ""
+    manual_input: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=utcnow)
+    updated_at: datetime = field(default_factory=utcnow)
+    attachment_references: list[EditorialSourceAttachmentReference] = field(default_factory=list)
+
+
+@dataclass
+class EditorialSourcePack:
+    id: str = field(default_factory=lambda: str(uuid4()))
+    weekly_pack_id: str = ""
+    campaign_type: str = ""
+    title: str = ""
+    summary: str = ""
+    status: str = "DRAFT"
+    confidentiality_level: str = "INTERNAL"
+    created_by: str = ""
+    created_at: datetime = field(default_factory=utcnow)
+    validated_by: str = ""
+    validated_at: datetime | None = None
+    items: list[EditorialSourceItem] = field(default_factory=list)
 
 
 @dataclass
