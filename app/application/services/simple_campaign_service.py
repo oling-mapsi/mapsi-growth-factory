@@ -7,8 +7,11 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from app.application.models.editorial_v1 import (
     EditorialBuilderSelection,
+    EditorialChannelVariantContext,
+    EditorialEmailMessage,
     EditorialGenerationContext,
     EditorialGenerationResult,
+    EditorialLinkedInPost,
     MapsiFeatureContext,
     OlingPracticeContext,
     ProductChangeContext,
@@ -131,6 +134,7 @@ class SimpleCampaignService:
         project_root: Path,
         editorial_service: EditorialGenerationService | None = None,
         knowledge_repository: KnowledgeRepository | None = None,
+        require_real_editorial_backend: bool = False,
     ) -> None:
         self.repository = repository
         self.publisher = publisher
@@ -139,6 +143,7 @@ class SimpleCampaignService:
         self.project_root = project_root
         self.editorial_service = editorial_service
         self.knowledge_repository = knowledge_repository
+        self.require_real_editorial_backend = require_real_editorial_backend
 
     def create_campaign(self, command: CreateSimpleCampaignCommand) -> CampaignRun:
         campaign_type = command.campaign_type.strip().upper()
@@ -197,43 +202,42 @@ class SimpleCampaignService:
         return saved
 
     def _build_generation_payload(self, campaign: CampaignRun) -> tuple[EditorialBrief, list[ContentAsset], list[SourceEvidence]]:
+        if self.require_real_editorial_backend:
+            self._assert_real_editorial_backend()
+        is_regeneration = bool(campaign.content_assets)
         if self.editorial_service is None or self.knowledge_repository is None:
-            brief = EditorialBrief(
-                campaign_run_id=campaign.id,
-                title=f"{campaign.name} - {campaign.theme}",
-                summary=f"Campagne {campaign.campaign_type} sur le theme {campaign.theme}.",
-            )
-            evidence = self._build_evidence(campaign)
-            assets = self._build_assets(campaign, evidence)
-            return brief, assets, evidence
+            raise InvalidStateTransitionError("Simple studio requires an editorial service and a knowledge repository.")
 
         results: dict[str, EditorialGenerationResult] = {}
         if "mapsi_site" in campaign.selected_channels:
+            mapsi_context = self._build_mapsi_context(campaign, destination_site="mapsi.fr", article_type="MAPSI_PRODUCT")
+            if is_regeneration:
+                mapsi_context.published_topic_history = []
             results["mapsi_site"] = self.editorial_service.generate_from_context(
-                context=self._build_mapsi_context(campaign, destination_site="mapsi.fr", article_type="MAPSI_PRODUCT"),
+                context=mapsi_context,
                 selection=self._mapsi_selection(campaign),
-                allow_failed_quality=True,
             )
         if "oling_site" in campaign.selected_channels:
             if campaign.campaign_type == "OLING":
+                oling_context = self._build_oling_context(campaign)
+                if is_regeneration:
+                    oling_context.published_topic_history = []
                 results["oling_site"] = self.editorial_service.generate_from_context(
-                    context=self._build_oling_context(campaign),
+                    context=oling_context,
                     selection=self._oling_selection(campaign),
-                    allow_failed_quality=True,
                 )
             else:
+                consulting_context = self._build_mapsi_context(campaign, destination_site="oling.fr", article_type="MAPSI_CONSULTING")
+                if is_regeneration:
+                    consulting_context.published_topic_history = []
                 results["oling_site"] = self.editorial_service.generate_from_context(
-                    context=self._build_mapsi_context(campaign, destination_site="oling.fr", article_type="MAPSI_CONSULTING"),
+                    context=consulting_context,
                     selection=self._mapsi_selection(campaign),
-                    allow_failed_quality=True,
                 )
 
         primary_result = results.get("mapsi_site") or results.get("oling_site")
         if primary_result is None:
-            primary_result = self.editorial_service.generate_from_context(
-                context=self._fallback_context_for_linkedin_only(campaign),
-                allow_failed_quality=True,
-            )
+            raise InvalidStateTransitionError("Simple studio requires at least one article channel before generating manual variants.")
 
         evidence = self._collect_editorial_evidence(campaign.id, [result.context for result in [*results.values(), primary_result]])
         assets: list[ContentAsset] = []
@@ -417,6 +421,7 @@ class SimpleCampaignService:
             topic=campaign.theme,
             article_type=article_type,  # type: ignore[arg-type]
             destination_site=destination_site,  # type: ignore[arg-type]
+            publication_channel="mapsi_site" if destination_site == "mapsi.fr" else "oling_site",  # type: ignore[arg-type]
             target_personas=feature.target_roles or ["direction_metier", "responsable_transformation"],
             knowledge_version=rules.knowledge_version_hash,
             positioning=rules.mapsi_product_positioning,
@@ -466,6 +471,7 @@ class SimpleCampaignService:
             topic=campaign.theme,
             article_type="OLING_PRACTICE",
             destination_site="oling.fr",
+            publication_channel="oling_site",
             target_personas=["dsi", "responsable_projet", "direction_metier"],
             knowledge_version=rules.knowledge_version_hash,
             positioning=rules.oling_company_profile,
@@ -498,11 +504,6 @@ class SimpleCampaignService:
             length_directive="longer",
             angle_directive=f"Traiter le theme libre utilisateur suivant avec la practice {practice.title}: {campaign.theme}",
         )
-
-    def _fallback_context_for_linkedin_only(self, campaign: CampaignRun) -> EditorialGenerationContext:
-        if campaign.campaign_type == "OLING":
-            return self._build_oling_context(campaign)
-        return self._build_mapsi_context(campaign, destination_site="mapsi.fr", article_type="MAPSI_PRODUCT")
 
     def _select_mapsi_feature(self, theme: str) -> MapsiFeature:
         if self.knowledge_repository is None:
@@ -664,7 +665,21 @@ class SimpleCampaignService:
             for item in evidence
             if str(item.payload.get("source_id", "")) in set(article.source_ids)
         ]
-        body = self._build_linkedin_from_article(campaign, article)
+        if self.editorial_service is None or not self.editorial_service.has_real_backend():
+            if self.require_real_editorial_backend:
+                raise InvalidStateTransitionError("LinkedIn variant generation is unavailable for simple studio.")
+            variant = None
+            linkedin = None
+            body = self._build_linkedin_from_article(campaign, article)
+            visual_brief = self._editorial_image_suggestion(campaign, article)
+        else:
+            context = self._channel_variant_context(campaign, article, "linkedin_manual")
+            variant = self.editorial_service.generate_linkedin_variant(context=context)
+            linkedin = variant.output
+            if not isinstance(linkedin, EditorialLinkedInPost):
+                raise InvalidStateTransitionError("LinkedIn variant generation is unavailable for simple studio.")
+            body = linkedin.body_text
+            visual_brief = linkedin.visual_brief
         asset = ContentAsset(
             campaign_run_id=campaign.id,
             asset_type="linkedin_manual_post",
@@ -672,15 +687,29 @@ class SimpleCampaignService:
             locale="fr-FR",
             title="Publication manuelle LinkedIn",
             content_text=body,
-            excerpt=self._editorial_image_suggestion(campaign, article),
+            excerpt=visual_brief,
             audience_segment_id=campaign.campaign_type.casefold(),
             source_evidence_ids=evidence_ids,
             evidence_ids=evidence_ids,
             results={
                 "source_article": article.model_dump(mode="json"),
-                "illustration_suggestion": self._editorial_image_suggestion(campaign, article),
+                "illustration_suggestion": visual_brief,
             },
         )
+        if linkedin is not None and variant is not None:
+            asset.results["channel_variant"] = linkedin.model_dump(mode="json")
+            asset.results["editorial_execution"] = {
+                "model": variant.metadata.model_name,
+                "prompt_version": variant.metadata.prompt_version,
+                "tokens": {
+                    "input": variant.metadata.token_usage.input_tokens,
+                    "output": variant.metadata.token_usage.output_tokens,
+                    "total": variant.metadata.token_usage.total_tokens,
+                },
+                "cost_usd": variant.estimated_cost_usd,
+                "duration_ms": variant.duration_ms,
+                "provider_type": variant.metadata.provider_type,
+            }
         asset.ensure_content_hash()
         return asset
 
@@ -696,29 +725,119 @@ class SimpleCampaignService:
             for item in evidence
             if str(item.payload.get("source_id", "")) in set(article.source_ids)
         ]
-        body_text = self._build_email_from_article(campaign, article)
+        if self.editorial_service is None or not self.editorial_service.has_real_backend():
+            if self.require_real_editorial_backend:
+                raise InvalidStateTransitionError("Email variant generation is unavailable for simple studio.")
+            variant = None
+            email = None
+            title = self._email_subject_from_article(campaign, article)
+            body_html = self._build_email_html(campaign, article)
+            body_text = self._build_email_from_article(campaign, article)
+            preview_text = article.excerpt
+            visual_brief = self._editorial_image_suggestion(campaign, article)
+            call_to_action = article.call_to_action_label
+            target_url = article.call_to_action_url
+        else:
+            context = self._channel_variant_context(campaign, article, "email_manual")
+            variant = self.editorial_service.generate_email_variant(context=context)
+            email = variant.output
+            if not isinstance(email, EditorialEmailMessage):
+                raise InvalidStateTransitionError("Email variant generation is unavailable for simple studio.")
+            title = email.subject
+            body_html = email.body_html
+            body_text = email.body_text
+            preview_text = email.preview_text
+            visual_brief = email.visual_brief
+            call_to_action = email.call_to_action_label
+            target_url = email.call_to_action_url
         asset = ContentAsset(
             campaign_run_id=campaign.id,
             asset_type="email_manual_message",
             channel=CHANNEL_TO_INTERNAL["email_manual"],
             locale="fr-FR",
-            title=self._email_subject_from_article(campaign, article),
-            content_html=self._build_email_html(campaign, article),
+            title=title,
+            content_html=body_html,
             content_text=body_text,
-            excerpt=article.excerpt,
-            call_to_action=article.call_to_action_label,
-            target_url=article.call_to_action_url,
+            excerpt=preview_text,
+            call_to_action=call_to_action,
+            target_url=target_url,
             audience_segment_id=campaign.campaign_type.casefold(),
             source_evidence_ids=evidence_ids,
             evidence_ids=evidence_ids,
             results={
                 "source_article": article.model_dump(mode="json"),
-                "illustration_suggestion": self._editorial_image_suggestion(campaign, article),
+                "illustration_suggestion": visual_brief,
                 "manual_send": True,
             },
         )
+        if email is not None and variant is not None:
+            asset.results["channel_variant"] = email.model_dump(mode="json")
+            asset.results["editorial_execution"] = {
+                "model": variant.metadata.model_name,
+                "prompt_version": variant.metadata.prompt_version,
+                "tokens": {
+                    "input": variant.metadata.token_usage.input_tokens,
+                    "output": variant.metadata.token_usage.output_tokens,
+                    "total": variant.metadata.token_usage.total_tokens,
+                },
+                "cost_usd": variant.estimated_cost_usd,
+                "duration_ms": variant.duration_ms,
+                "provider_type": variant.metadata.provider_type,
+            }
         asset.ensure_content_hash()
         return asset
+
+    def _channel_variant_context(self, campaign: CampaignRun, article, channel: str) -> EditorialChannelVariantContext:
+        destination_site = "oling.fr" if campaign.campaign_type == "OLING" or "oling_site" in campaign.selected_channels else "mapsi.fr"
+        return EditorialChannelVariantContext(
+            topic=campaign.theme,
+            campaign_type=campaign.campaign_type,  # type: ignore[arg-type]
+            channel=channel,  # type: ignore[arg-type]
+            destination_site=destination_site,  # type: ignore[arg-type]
+            target_personas=list(article.target_personas),
+            positioning=self._channel_positioning(campaign),
+            editorial_rules=self._channel_editorial_rules(campaign),
+            forbidden_claims=self._channel_forbidden_claims(campaign),
+            desired_tone=self._tone_signature(campaign, channel),
+            desired_outcome=self._channel_outcome(campaign, channel),
+            source_article=article,
+        )
+
+    def _assert_real_editorial_backend(self) -> None:
+        if self.editorial_service is None or not self.editorial_service.has_real_backend():
+            raise InvalidStateTransitionError(
+                "Simple studio requires a real OpenAI editorial backend. Configure OPENAI_API_KEY, EDITORIAL_ENGINE_MODE=real and EDITORIAL_AGENT_BACKEND=openai."
+            )
+
+    def _channel_positioning(self, campaign: CampaignRun) -> str:
+        if campaign.campaign_type == "MAPSI_USERS":
+            return "MAPSI doit apparaitre comme un produit utile, clair, fiable et concret pour les utilisateurs."
+        if campaign.campaign_type == "MAPSI_MARKETING":
+            return "MAPSI doit apparaitre comme une solution credible, utile en execution et soutenue par une vraie expertise terrain."
+        return "OLING doit apparaitre comme un cabinet de conseil structurant, credible, pragmatique et orienté decision."
+
+    def _channel_editorial_rules(self, campaign: CampaignRun) -> str:
+        if campaign.campaign_type == "MAPSI_USERS":
+            return "Eviter le jargon, garder un ton clair, rythmé, pedagogue, et montrer rapidement le benefice concret."
+        if campaign.campaign_type == "MAPSI_MARKETING":
+            return "Alterner preuve, usage, mise en perspective et credibilite terrain. Proscrire les slogans et banalites."
+        return "Montrer une pensee de conseil mature, structuree, sobre et credible. Pas de contenu generique ni auto-promotion creuse."
+
+    def _channel_forbidden_claims(self, campaign: CampaignRun) -> list[str]:
+        if campaign.campaign_type == "OLING" and self.knowledge_repository is not None:
+            return self._select_oling_practice(campaign.theme).forbidden_claims
+        if campaign.campaign_type in {"MAPSI_USERS", "MAPSI_MARKETING"} and self.knowledge_repository is not None:
+            return self._select_mapsi_feature(campaign.theme).forbidden_claims
+        return []
+
+    def _channel_outcome(self, campaign: CampaignRun, channel: str) -> str:
+        if channel == "linkedin_manual":
+            return "Produire un post natif LinkedIn premium, lisible, humain, direct, partageable sans retouche lourde."
+        if campaign.campaign_type == "MAPSI_USERS":
+            return "Produire un email d'adoption utile, professionnel et actionnable."
+        if campaign.campaign_type == "MAPSI_MARKETING":
+            return "Produire un email de communication professionnelle, structuré et convaincant."
+        return "Produire un email conseil premium, executive-friendly et directement exploitable."
 
     def _build_linkedin_from_article(self, campaign: CampaignRun, article) -> str:
         highlights = [claim.text for claim in article.claims[:2] if claim.text.strip()]

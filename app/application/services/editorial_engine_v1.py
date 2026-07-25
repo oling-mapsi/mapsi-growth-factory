@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from abc import ABC, abstractmethod
@@ -16,11 +17,14 @@ from pydantic import BaseModel
 from app.application.models.editorial_agents import EditorialExecutionMetadata, EditorialTokenUsage
 from app.application.models.editorial_v1 import (
     EditorialArticle,
+    EditorialChannelVariantContext,
     EditorialBuilderSelection,
+    EditorialEmailMessage,
     EditorialClaim,
     EditorialGenerationContext,
     EditorialGenerationResult,
     EditorialGenerationRecord,
+    EditorialLinkedInPost,
     EditorialQualityIssue,
     EditorialQualityReport,
     EditorialSourceDescriptor,
@@ -43,12 +47,14 @@ from app.knowledge import KnowledgeRepository
 ROOT = Path(__file__).resolve().parents[3]
 PROMPTS_ROOT = ROOT / "prompts"
 EDITORIAL_PROMPT_VERSION = "v1"
+LINKEDIN_PROMPT_VERSION = "v1"
+EMAIL_PROMPT_VERSION = "v1"
 
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 TOKEN_RE = re.compile(r"\b(?:sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|[A-Za-z0-9_-]{24,}\.[A-Za-z0-9._-]{8,})\b")
 SCRIPT_RE = re.compile(r"<\s*(script|iframe)\b", re.IGNORECASE)
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-CLIENT_RE = re.compile(r"\b(?:acme|client [a-z0-9_-]+|chez [a-z0-9_-]+)\b", re.IGNORECASE)
+CLIENT_RE = re.compile(r"\b(?:acme|client [a-z0-9_-]+|chez (?!oling\b)[a-z0-9_-]+)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -58,6 +64,14 @@ class EditorialGenerationEnvelope:
     duration_ms: int
     input_hash: str
     output_hash: str
+    estimated_cost_usd: float
+
+
+@dataclass(frozen=True)
+class StructuredOutputEnvelope:
+    output: BaseModel
+    metadata: EditorialExecutionMetadata
+    duration_ms: int
     estimated_cost_usd: float
 
 
@@ -79,25 +93,48 @@ class OpenAIEditorialGenerator(EditorialGeneratorInterface):
     def generate(self, context: EditorialGenerationContext) -> EditorialGenerationEnvelope:
         prompt = self._build_prompt(context)
         input_hash = sha256_hexdigest(context.model_dump_json())
-        started = time.perf_counter()
-        result = self.provider.run_structured(
+        structured = self.run_structured_output(
             agent_name=self.agent_name,
             prompt=prompt,
             input_model=context,
             output_type=EditorialArticle,
-            model_name=self.model_name,
             prompt_version=EDITORIAL_PROMPT_VERSION,
+        )
+        output_hash = sha256_hexdigest(structured.output.model_dump_json())
+        return EditorialGenerationEnvelope(
+            article=cast(EditorialArticle, structured.output),
+            metadata=structured.metadata,
+            duration_ms=structured.duration_ms,
+            input_hash=input_hash,
+            output_hash=output_hash,
+            estimated_cost_usd=structured.estimated_cost_usd,
+        )
+
+    def run_structured_output(
+        self,
+        *,
+        agent_name: str,
+        prompt: str,
+        input_model: BaseModel,
+        output_type: type[BaseModel],
+        prompt_version: str,
+    ) -> StructuredOutputEnvelope:
+        started = time.perf_counter()
+        result = self.provider.run_structured(
+            agent_name=agent_name,
+            prompt=prompt,
+            input_model=input_model,
+            output_type=output_type,
+            model_name=self.model_name,
+            prompt_version=prompt_version,
             temperature=self.temperature,
         )
         duration_ms = max(1, int((time.perf_counter() - started) * 1000))
-        output_hash = sha256_hexdigest(result.output.model_dump_json())
         cost = _estimate_cost(result.metadata.token_usage)
-        return EditorialGenerationEnvelope(
-            article=result.output,
+        return StructuredOutputEnvelope(
+            output=result.output,
             metadata=result.metadata,
             duration_ms=duration_ms,
-            input_hash=input_hash,
-            output_hash=output_hash,
             estimated_cost_usd=cost,
         )
 
@@ -108,7 +145,40 @@ class OpenAIEditorialGenerator(EditorialGeneratorInterface):
             "MAPSI_CONSULTING": "Ecrire un article de conseil OLING ancre sur une fonctionnalite MAPSI prouvee, pour publication cible oling.fr.",
             "OLING_PRACTICE": "Ecrire un article practice OLING ancre sur la fiche de pratique, sans aucun contenu client specifique.",
         }
-        return f"{base_prompt}\n\nMode actif: {context.article_type}\n{mode_instructions[context.article_type]}"
+        channel_instructions = {
+            "mapsi_site": (
+                "Canal article: mapsi_site. Ecrire pour une publication MAPSI.fr : orientation usage, lisibilite, adoption, "
+                "pedagogie credible, demonstration fonctionnelle, niveau de detail exploitable par un lecteur produit."
+            ),
+            "oling_site": (
+                "Canal article: oling_site. Ecrire pour une publication Oling.fr : posture conseil, hauteur de vue, cadrage, "
+                "arbitrages, execution, impact metier, ton cabinet exigeant et sobre."
+            ),
+        }
+        signature = {
+            ("MAPSI_PRODUCT", "mapsi_site"): (
+                "Signature editoriale attendue: article MAPSI publie comme un contenu premium d'adoption produit. "
+                "Le lecteur doit comprendre le probleme, l'usage, le changement recent et le benefice concret."
+            ),
+            ("MAPSI_CONSULTING", "oling_site"): (
+                "Signature editoriale attendue: article conseil Oling appuye sur MAPSI. "
+                "Le lecteur doit percevoir la complementarite entre solution, mission, cadrage et accompagnement."
+            ),
+            ("OLING_PRACTICE", "oling_site"): (
+                "Signature editoriale attendue: article de cabinet sur une pratique OLING. "
+                "Le lecteur doit percevoir une methode credible, des points de vigilance, et une valeur de decision."
+            ),
+        }
+        return (
+            f"{base_prompt}\n\n"
+            f"Mode actif: {context.article_type}\n"
+            f"{mode_instructions[context.article_type]}\n"
+            f"{channel_instructions[context.publication_channel]}\n"
+            f"{signature[(context.article_type, context.publication_channel)]}\n"
+            "Exigence de rendu: article publiable tel quel, avec un vrai niveau editorial, une ouverture forte, "
+            "des transitions naturelles, des sous-parties utiles, des bullets choisis, une chute propre, et une "
+            "suggestion d'illustration implicite dans le corps sans basculer dans le ton publicitaire."
+        )
 
 
 class SimulatedEditorialGenerator(EditorialGeneratorInterface):
@@ -402,8 +472,74 @@ class EditorialGenerationService:
         )
         return EditorialGenerationResult(context=context, record=record, selection=selection)
 
+    def has_real_backend(self) -> bool:
+        return isinstance(self.generator, OpenAIEditorialGenerator)
+
+    def generate_linkedin_variant(self, *, context: EditorialChannelVariantContext) -> StructuredOutputEnvelope:
+        generator = self._require_openai_generator()
+        prompt = self._build_linkedin_prompt(context)
+        return generator.run_structured_output(
+            agent_name="LinkedInWriterAgent",
+            prompt=prompt,
+            input_model=context,
+            output_type=EditorialLinkedInPost,
+            prompt_version=LINKEDIN_PROMPT_VERSION,
+        )
+
+    def generate_email_variant(self, *, context: EditorialChannelVariantContext) -> StructuredOutputEnvelope:
+        generator = self._require_openai_generator()
+        prompt = self._build_email_prompt(context)
+        return generator.run_structured_output(
+            agent_name="CustomerEmailWriterAgent",
+            prompt=prompt,
+            input_model=context,
+            output_type=EditorialEmailMessage,
+            prompt_version=EMAIL_PROMPT_VERSION,
+        )
+
     def _generate(self, *, context: EditorialGenerationContext, persist: bool) -> EditorialGenerationRecord:
         return self.generate_from_context(context=context, persist=persist).record
+
+    def _require_openai_generator(self) -> OpenAIEditorialGenerator:
+        if not isinstance(self.generator, OpenAIEditorialGenerator):
+            raise EditorialGenerationBlockedError("Simple studio requires a real OpenAI editorial backend.")
+        return self.generator
+
+    def _build_linkedin_prompt(self, context: EditorialChannelVariantContext) -> str:
+        base_prompt = (PROMPTS_ROOT / "linkedin-writer-agent" / f"{LINKEDIN_PROMPT_VERSION}.txt").read_text(encoding="utf-8")
+        signature = {
+            "MAPSI_USERS": "Ton adopte: pedagogique, concret, rassurant, centre usage et benefice immediat.",
+            "MAPSI_MARKETING": "Ton adopte: expert, vivant, preuve terrain, valeur produit-service, sans surpromesse.",
+            "OLING": "Ton adopte: conseil de haut niveau, sobre, credible, structure, axe decision et execution.",
+        }[context.campaign_type]
+        return (
+            f"{base_prompt}\n\n"
+            f"Canal: {context.channel}\n"
+            f"Campagne: {context.campaign_type}\n"
+            f"Destination: {context.destination_site}\n"
+            f"{signature}\n"
+            "Objectif: produire un vrai post LinkedIn premium, ecrit comme par un excellent redacteur ChatGPT, "
+            "pas une adaptation mecanique d'article. Ouvrir fort, installer un rythme humain, alterner paragraphes "
+            "courts et puces, finir par une invitation claire et professionnelle. Eviter toute formule generique."
+        )
+
+    def _build_email_prompt(self, context: EditorialChannelVariantContext) -> str:
+        base_prompt = (PROMPTS_ROOT / "customer-email-writer-agent" / f"{EMAIL_PROMPT_VERSION}.txt").read_text(encoding="utf-8")
+        signature = {
+            "MAPSI_USERS": "Ton adopte: clair, utile, pedagogique, orienté adoption et passage a l'action.",
+            "MAPSI_MARKETING": "Ton adopte: professionnel, credibilite terrain, articulation entre valeur produit et accompagnement.",
+            "OLING": "Ton adopte: conseil, executive-friendly, rassurant, decisionnel et concret.",
+        }[context.campaign_type]
+        return (
+            f"{base_prompt}\n\n"
+            f"Canal: {context.channel}\n"
+            f"Campagne: {context.campaign_type}\n"
+            f"Destination: {context.destination_site}\n"
+            f"{signature}\n"
+            "Objectif: produire un email manuel premium, directement exploitable, avec un objet precis, un angle net, "
+            "une progression claire, des puces utiles, et une conclusion naturelle. Le rendu doit paraitre ecrit par "
+            "un excellent redacteur professionnel, pas par un template backend."
+        )
 
     def _build_mapsi_context(self, *, article_type: str, destination: str) -> EditorialGenerationContext:
         cutoff = datetime.now(UTC).date() - timedelta(days=180)
@@ -423,6 +559,7 @@ class EditorialGenerationService:
             topic=topic,
             article_type=cast(str, article_type),
             destination_site=cast(str, "mapsi.fr" if destination == "mapsi" else "oling.fr"),
+            publication_channel=cast(str, "mapsi_site" if destination == "mapsi" else "oling_site"),
             target_personas=selected_feature.target_roles or ["direction_metier", "responsable_transformation"],
             knowledge_version=rules.knowledge_version_hash,
             positioning=rules.mapsi_product_positioning,
@@ -467,6 +604,7 @@ class EditorialGenerationService:
             topic=practice.title,
             article_type="OLING_PRACTICE",
             destination_site="oling.fr",
+            publication_channel="oling_site",
             target_personas=["dsi", "responsable_projet", "direction_metier"],
             knowledge_version=rules.knowledge_version_hash,
             positioning=rules.oling_company_profile,
@@ -685,14 +823,17 @@ def build_editorial_generation_service(session, *, force_mode: str | None = None
     settings = get_settings()
     effective_mode = force_mode or settings.editorial_engine_mode
     provider: EditorialGeneratorInterface
-    if effective_mode in {"real", "shadow"} or settings.editorial_agent_backend == "openai":
+    should_use_openai = effective_mode in {"real", "shadow"} or (force_mode is None and settings.editorial_agent_backend == "openai")
+    if should_use_openai:
+        if settings.openai_api_key.strip():
+            os.environ["OPENAI_API_KEY"] = settings.openai_api_key.strip()
         try:
             import agents  # noqa: F401
             from app.infrastructure.agents.openai_backend import OpenAIAgentsBackend
 
             provider = OpenAIEditorialGenerator(OpenAIAgentsBackend())
-        except ImportError:
-            provider = SimulatedEditorialGenerator()
+        except ImportError as exc:
+            raise RuntimeError("OpenAI Agents SDK is not installed.") from exc
     else:
         provider = SimulatedEditorialGenerator()
     return EditorialGenerationService(

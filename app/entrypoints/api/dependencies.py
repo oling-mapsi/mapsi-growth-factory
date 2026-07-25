@@ -85,4 +85,5 @@ def get_simple_campaign_service(session: Session = Depends(get_db_session)) -> S
         project_root=Path(__file__).resolve().parents[3],
         editorial_service=build_editorial_generation_service(session),
         knowledge_repository=KnowledgeRepository(session),
+        require_real_editorial_backend=True,
     )

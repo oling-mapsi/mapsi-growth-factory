@@ -39,7 +39,7 @@ def _seed_recent_product_change(session, *, collected_at: datetime | None = None
 
 
 def _article_payload(*, topic: str, article_type: str, source_ids: list[str], body_text: str | None = None, claim_verified: bool = True) -> dict:
-    text = body_text or "Cet article explique un sujet prouve, ses usages et ses bonnes pratiques sans promesse excessive. " * 5
+    text = body_text or "Cet article explique un sujet prouve, ses usages et ses bonnes pratiques sans promesse excessive. " * 18
     claim_sources = [source_ids[0]] if source_ids else []
     return {
         "topic": topic,
@@ -118,6 +118,24 @@ def test_generate_oling_practice_works(session) -> None:
 
     assert record.article.article_type == "OLING_PRACTICE"
     assert record.quality.passed is True
+
+
+def test_article_prompt_is_distinct_between_mapsi_site_and_oling_site(session) -> None:
+    _seed_recent_product_change(session)
+    backend = FakeStructuredAgentBackend([], provider_type="openai")
+    service = build_editorial_generation_service(session, force_mode="shadow")
+    generator = OpenAIEditorialGenerator(backend)
+    service.generator = generator
+
+    mapsi_prompt = generator._build_prompt(service._build_mapsi_context(article_type="MAPSI_PRODUCT", destination="mapsi"))
+    consulting_prompt = generator._build_prompt(service._build_mapsi_context(article_type="MAPSI_CONSULTING", destination="oling"))
+    oling_prompt = generator._build_prompt(service._build_oling_context(practice_id="rgpd-et-dpo"))
+
+    assert "Canal article: mapsi_site" in mapsi_prompt
+    assert "publication MAPSI.fr" in mapsi_prompt
+    assert "Canal article: oling_site" in consulting_prompt
+    assert "publication Oling.fr" in consulting_prompt
+    assert "article de cabinet sur une pratique OLING" in oling_prompt
 
 
 def test_generate_blocks_claim_without_valid_source(session) -> None:

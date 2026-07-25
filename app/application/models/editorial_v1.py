@@ -95,6 +95,7 @@ class EditorialGenerationContext(StrictModel):
     topic: StrictStr
     article_type: Literal["MAPSI_PRODUCT", "MAPSI_CONSULTING", "OLING_PRACTICE"]
     destination_site: Literal["mapsi.fr", "oling.fr"]
+    publication_channel: Literal["mapsi_site", "oling_site"]
     target_personas: list[StrictStr]
     knowledge_version: StrictStr
     positioning: StrictStr
@@ -112,6 +113,37 @@ class EditorialGenerationContext(StrictModel):
     desired_title: StrictStr = ""
     length_directive: Literal["", "shorter", "longer"] = ""
     angle_directive: StrictStr = ""
+
+
+class EditorialChannelVariantContext(StrictModel):
+    topic: StrictStr
+    campaign_type: Literal["MAPSI_USERS", "MAPSI_MARKETING", "OLING"]
+    channel: Literal["linkedin_manual", "email_manual"]
+    destination_site: Literal["mapsi.fr", "oling.fr"]
+    target_personas: list[StrictStr]
+    positioning: StrictStr
+    editorial_rules: StrictStr
+    forbidden_claims: list[StrictStr]
+    desired_tone: StrictStr
+    desired_outcome: StrictStr
+    source_article: EditorialArticle
+
+
+class EditorialLinkedInPost(StrictModel):
+    body_text: StrictStr
+    visual_brief: StrictStr
+    call_to_action: StrictStr
+    hashtags: list[StrictStr] = Field(default_factory=list)
+
+
+class EditorialEmailMessage(StrictModel):
+    subject: StrictStr
+    preview_text: StrictStr
+    body_html: StrictStr
+    body_text: StrictStr
+    visual_brief: StrictStr
+    call_to_action_label: StrictStr
+    call_to_action_url: StrictStr
 
 
 class EditorialBuilderSelection(StrictModel):

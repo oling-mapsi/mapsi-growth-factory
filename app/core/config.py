@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     mautic_password: str = ""
     mautic_access_token: str = ""
     mautic_verify_tls: bool = True
+    openai_api_key: str = ""
     linkedin_mode: str = "mock"
     linkedin_client_id: str = ""
     linkedin_client_secret: str = ""
