@@ -2,7 +2,7 @@ import pytest
 
 from app.application.dto import CreateCampaignCommand, PublishCampaignCommand, ReviewCampaignCommand
 from app.application.services.campaign_service import CampaignService
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.domain.errors import CampaignPublicationForbiddenError
 from app.infrastructure.connectors.fakes import (
     CompositeSimulatedGenerator,
@@ -99,7 +99,7 @@ def test_multichannel_feature_flags_are_disabled_by_default(monkeypatch) -> None
         monkeypatch.delenv(key, raising=False)
     get_settings.cache_clear()
 
-    settings = get_settings()
+    settings = Settings(_env_file=None)
 
     assert settings.publish_oling_enabled is False
     assert settings.publish_mapsi_site_enabled is False

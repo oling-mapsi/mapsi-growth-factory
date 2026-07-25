@@ -70,6 +70,8 @@ from app.infrastructure.repositories.product_intelligence import (
 )
 from app.infrastructure.tasks import InMemoryTaskQueue
 from app.main import create_app
+from app.mock_mapsi_site_server import STATE as MAPSI_SITE_STATE
+from app.mock_oling_server import STATE as OLING_STATE
 
 TEST_DATABASE_URL = "sqlite+pysqlite:///:memory:"
 engine = create_engine(
@@ -86,6 +88,17 @@ def reset_database() -> Generator[None, None, None]:
     Base.metadata.create_all(bind=engine)
     yield
     Base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture(autouse=True)
+def reset_mock_publication_servers() -> Generator[None, None, None]:
+    MAPSI_SITE_STATE["articles"].clear()
+    MAPSI_SITE_STATE["preview_tokens"].clear()
+    MAPSI_SITE_STATE["next_article_id"] = 1
+    MAPSI_SITE_STATE["supports_unpublish"] = True
+    OLING_STATE["articles"].clear()
+    OLING_STATE["preview_tokens"].clear()
+    yield
 
 
 @pytest.fixture
