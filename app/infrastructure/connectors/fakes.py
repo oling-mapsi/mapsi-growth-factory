@@ -5,6 +5,7 @@ from app.application.ports.connectors import (
     MAPSIConnectorPort,
     MauticConnectorPort,
     MicrosoftGraphConnectorPort,
+    PublisherPort,
     OlingSiteConnectorPort,
 )
 from app.core.config import get_settings
@@ -202,10 +203,10 @@ class CompositeSimulatedGenerator(SimulatedGeneratorMixin):
 
 
 class CompositeSimulatedPublisher:
-    def __init__(self, publishers: dict[str, LinkedInConnectorPort | OlingSiteConnectorPort]) -> None:
+    def __init__(self, publishers: dict[str, PublisherPort]) -> None:
         self.publishers = publishers
 
-    def _publisher_for(self, channel: str) -> LinkedInConnectorPort | OlingSiteConnectorPort:
+    def _publisher_for(self, channel: str) -> PublisherPort:
         if channel not in self.publishers:
             raise ValueError(f"Unsupported publication channel: {channel}")
         return self.publishers[channel]

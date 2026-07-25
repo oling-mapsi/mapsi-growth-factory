@@ -31,12 +31,11 @@ from app.application.dto_studio_admin import (
 )
 from app.application.services.campaign_publisher import CampaignPublisher
 from app.application.services.campaign_service import CampaignService
+from app.application.services.editorial_production_v1 import EditorialAssetMutationService, MapsiMarketProductionBuilder, OlingPracticeProductionBuilder
 from app.application.services.linkedin_post_publisher import LinkedInPostPublisher
-from app.application.services.mapsi_market_campaign_builder import MapsiMarketCampaignBuilder
 from app.application.services.mapsi_news_publisher import MapsiNewsPublisher
 from app.application.services.mapsi_user_weekly_email_builder import MapsiUserWeeklyEmailBuilder
 from app.application.services.operation_mode_service import OperationModeService
-from app.application.services.oling_practice_campaign_builder import OlingPracticeCampaignBuilder
 from app.application.services.oling_news_publisher import OlingNewsPublisher
 from app.application.services.review_portal_service import ReviewPortalService
 from app.core.config import get_settings
@@ -54,6 +53,7 @@ from app.infrastructure.repositories.mautic_publications import MauticPublicatio
 from app.infrastructure.repositories.mapsi_site_publications import MapsiNewsPublicationRepository
 from app.infrastructure.repositories.oling import OlingNewsPublicationRepository
 from app.infrastructure.repositories.review_portal import ReviewPortalRepository
+from app.infrastructure.repositories.asset_revisions import AssetRevisionRepository
 from app.infrastructure.repositories.editorial_source_packs import EditorialSourcePackRepository
 from app.infrastructure.repositories.weekly_communication_packs import WeeklyCommunicationPackRepository
 
@@ -77,9 +77,11 @@ class StudioAdminService:
         linkedin_publisher: LinkedInPostPublisher,
         oling_publisher: OlingNewsPublisher,
         mapsi_publisher: MapsiNewsPublisher,
-        mapsi_market_builder: MapsiMarketCampaignBuilder,
-        oling_practice_builder: OlingPracticeCampaignBuilder,
+        mapsi_market_builder: MapsiMarketProductionBuilder,
+        oling_practice_builder: OlingPracticeProductionBuilder,
         mapsi_users_builder: MapsiUserWeeklyEmailBuilder,
+        editorial_asset_mutation_service: EditorialAssetMutationService | None = None,
+        asset_revision_repository: AssetRevisionRepository | None = None,
     ) -> None:
         self.settings = get_settings()
         self.campaign_service = campaign_service
@@ -100,6 +102,8 @@ class StudioAdminService:
         self.mapsi_market_builder = mapsi_market_builder
         self.oling_practice_builder = oling_practice_builder
         self.mapsi_users_builder = mapsi_users_builder
+        self.editorial_asset_mutation_service = editorial_asset_mutation_service
+        self.asset_revision_repository = asset_revision_repository
         self.operation_mode = OperationModeService()
 
     def dashboard(self, filters: dict[str, object]) -> StudioAdminDashboard:
@@ -656,6 +660,27 @@ class StudioAdminService:
                 metadata={"revision": asset.revision},
             )
         ]
+        if self.asset_revision_repository is not None:
+            for snapshot in self.asset_revision_repository.list_for_asset(asset_id):
+                versions.append(
+                    StudioAdminAssetVersion(
+                        version=snapshot.version,
+                        label="snapshot",
+                        status=snapshot.status,
+                        content_hash=snapshot.content_hash,
+                        approved_content_hash=snapshot.approved_content_hash,
+                        published_at=None,
+                        created_at=snapshot.created_at,
+                        title=snapshot.title,
+                        subject=snapshot.subject,
+                        content_html=snapshot.content_html,
+                        content_text=snapshot.content_text,
+                        excerpt=snapshot.excerpt,
+                        call_to_action=snapshot.call_to_action,
+                        target_url=snapshot.target_url,
+                        metadata=dict(snapshot.results or {}),
+                    )
+                )
         if review is not None:
             versions.append(
                 StudioAdminAssetVersion(
@@ -731,6 +756,58 @@ class StudioAdminService:
         campaign = self.campaign_service.get_campaign(asset.campaign_run_id)
         return self._asset_summary(campaign, asset)
 
+    def generate_mapsi_market(
+        self,
+        *,
+        actor: str,
+        correlation_id: str,
+        weekly_pack_id: str = "",
+        pilot_mode: bool = False,
+    ) -> StudioAdminCampaignSummary:
+        campaign = CampaignRun(
+            name=f"MAPSI market {datetime.now(UTC).date().isoformat()}",
+            objective="market_visibility",
+            campaign_type="MAPSI_MARKET",
+            status=CampaignStatus.DRAFT,
+            weekly_pack_id=weekly_pack_id,
+            pilot_mode=pilot_mode,
+        )
+        campaign.audience_segments.append(AudienceSegment(campaign_run_id=campaign.id, name="market", description="MAPSI market"))
+        generated = self.mapsi_market_builder.build(weekly_pack_id=weekly_pack_id, pilot_mode=pilot_mode, record_theme_history=True)
+        brief = EditorialBrief(campaign_run_id=campaign.id, title=generated.brief.selected_topic, summary=generated.brief.objective)
+        campaign.editorial_briefs = [brief]
+        campaign.content_assets = generated.assets
+        campaign.status = CampaignStatus.READY_FOR_REVIEW if any(asset.status is AssetStatus.READY_FOR_REVIEW for asset in generated.assets) else CampaignStatus.FAILED
+        campaign = self.campaign_service.repository.add(campaign)
+        self.audit_repository.append(campaign.id, "editorial.mapsi_market_generated", {"actor": actor, "correlation_id": correlation_id}, actor_id=actor, actor_source="studio_admin")
+        return self._campaign_summary(campaign)
+
+    def generate_oling_practice(
+        self,
+        *,
+        actor: str,
+        correlation_id: str,
+        weekly_pack_id: str = "",
+        pilot_mode: bool = False,
+    ) -> StudioAdminCampaignSummary:
+        campaign = CampaignRun(
+            name=f"OLING practice {datetime.now(UTC).date().isoformat()}",
+            objective="practice_visibility",
+            campaign_type="OLING_PRACTICE",
+            status=CampaignStatus.DRAFT,
+            weekly_pack_id=weekly_pack_id,
+            pilot_mode=pilot_mode,
+        )
+        campaign.audience_segments.append(AudienceSegment(campaign_run_id=campaign.id, name="practice", description="OLING practice"))
+        generated = self.oling_practice_builder.build(weekly_pack_id=weekly_pack_id, pilot_mode=pilot_mode, record_theme_history=True)
+        brief = EditorialBrief(campaign_run_id=campaign.id, title=generated.brief.practice, summary=generated.brief.business_problem)
+        campaign.editorial_briefs = [brief]
+        campaign.content_assets = generated.assets
+        campaign.status = CampaignStatus.READY_FOR_REVIEW if any(asset.status is AssetStatus.READY_FOR_REVIEW for asset in generated.assets) else CampaignStatus.FAILED
+        campaign = self.campaign_service.repository.add(campaign)
+        self.audit_repository.append(campaign.id, "editorial.oling_practice_generated", {"actor": actor, "correlation_id": correlation_id}, actor_id=actor, actor_source="studio_admin")
+        return self._campaign_summary(campaign)
+
     def request_asset_regeneration(
         self,
         asset_id: str,
@@ -748,6 +825,49 @@ class StudioAdminService:
             correlation_id=correlation_id,
             idempotency_key=idempotency_key,
             comment=comment,
+        )
+        campaign = self.campaign_service.get_campaign(asset.campaign_run_id)
+        return self._asset_summary(campaign, asset)
+
+    def regenerate_asset(
+        self,
+        asset_id: str,
+        *,
+        actor: str,
+        expected_version: int,
+        correlation_id: str,
+        idempotency_key: str | None,
+        comment: str = "",
+    ) -> StudioAdminAssetSummary:
+        if self.editorial_asset_mutation_service is None:
+            raise CampaignPublicationForbiddenError("Editorial regeneration service is not configured.")
+        asset = self.editorial_asset_mutation_service.regenerate(asset_id, actor=actor, expected_version=expected_version, instruction=comment)
+        campaign = self.campaign_service.get_campaign(asset.campaign_run_id)
+        return self._asset_summary(campaign, asset)
+
+    def rewrite_asset(
+        self,
+        asset_id: str,
+        *,
+        actor: str,
+        expected_version: int,
+        correlation_id: str,
+        idempotency_key: str | None,
+        instruction: str = "",
+        desired_title: str = "",
+        length_directive: str = "",
+        angle_directive: str = "",
+    ) -> StudioAdminAssetSummary:
+        if self.editorial_asset_mutation_service is None:
+            raise CampaignPublicationForbiddenError("Editorial rewrite service is not configured.")
+        asset = self.editorial_asset_mutation_service.regenerate(
+            asset_id,
+            actor=actor,
+            expected_version=expected_version,
+            instruction=instruction,
+            desired_title=desired_title,
+            length_directive=length_directive,
+            angle_directive=angle_directive,
         )
         campaign = self.campaign_service.get_campaign(asset.campaign_run_id)
         return self._asset_summary(campaign, asset)

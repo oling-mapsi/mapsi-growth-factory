@@ -19,7 +19,10 @@ class CampaignRunModel(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     objective: Mapped[str] = mapped_column(Text, nullable=False)
+    theme: Mapped[str] = mapped_column(Text, nullable=False, default="")
     campaign_type: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    workflow_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="LEGACY")
+    selected_channels: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     weekly_pack_id: Mapped[str] = mapped_column(String(36), nullable=False, default="")
     week_reference: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     week_year: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -215,6 +218,27 @@ class ContentAssetModel(Base):
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     campaign: Mapped[CampaignRunModel] = relationship(back_populates="content_assets")
+
+
+class AssetRevisionSnapshotModel(Base):
+    __tablename__ = "asset_revision_snapshots"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    content_asset_id: Mapped[str] = mapped_column(ForeignKey("content_assets.id"), nullable=False)
+    campaign_run_id: Mapped[str] = mapped_column(ForeignKey("campaign_runs.id"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    subject: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    content_html: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    content_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    excerpt: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    call_to_action: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    target_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    approved_content_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    results: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
 class AudienceSegmentModel(Base):

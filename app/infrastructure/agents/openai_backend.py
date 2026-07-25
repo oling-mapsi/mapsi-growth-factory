@@ -33,7 +33,8 @@ class OpenAIAgentsBackend(StructuredAgentBackendPort):
         )
         result = Runner.run_sync(agent, input=input_model.model_dump_json())
         output = output_type.model_validate(result.final_output)
-        usage = getattr(result, "usage", None)
+        context_wrapper = getattr(result, "context_wrapper", None)
+        usage = getattr(context_wrapper, "usage", None) or getattr(result, "usage", None)
         if usage is None:
             token_usage = self._estimate_usage(prompt=prompt, input_model=input_model, output=output.model_dump(mode="json"))
         else:

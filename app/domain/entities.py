@@ -245,6 +245,26 @@ class ContentAsset:
 
 
 @dataclass
+class AssetRevisionSnapshot:
+    id: str = field(default_factory=lambda: str(uuid4()))
+    content_asset_id: str = ""
+    campaign_run_id: str = ""
+    version: int = 1
+    status: str = ""
+    title: str = ""
+    subject: str = ""
+    content_html: str = ""
+    content_text: str = ""
+    excerpt: str = ""
+    call_to_action: str = ""
+    target_url: str = ""
+    content_hash: str = ""
+    approved_content_hash: str = ""
+    results: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=utcnow)
+
+
+@dataclass
 class AudienceSegment:
     id: str = field(default_factory=lambda: str(uuid4()))
     campaign_run_id: str = ""
@@ -640,7 +660,10 @@ class CampaignRun:
     id: str = field(default_factory=lambda: str(uuid4()))
     name: str = ""
     objective: str = ""
+    theme: str = ""
     campaign_type: str = ""
+    workflow_kind: str = "LEGACY"
+    selected_channels: list[str] = field(default_factory=list)
     weekly_pack_id: str = ""
     week_reference: str = ""
     week_year: int = 0
@@ -708,6 +731,10 @@ class CampaignRun:
                 CampaignStatus.SOURCES_READY,
                 CampaignStatus.GENERATING,
                 CampaignStatus.FAILED,
+                CampaignStatus.GENERATED,
+                CampaignStatus.READY_FOR_REVIEW,
+                CampaignStatus.PARTIALLY_APPROVED,
+                CampaignStatus.APPROVED,
             },
         )
         self.editorial_briefs = [brief]
