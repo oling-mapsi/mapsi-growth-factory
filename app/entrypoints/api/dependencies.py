@@ -1,62 +1,23 @@
+from pathlib import Path
+
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
-from app.application.services.audience_segmentation_service import AudienceSegmentationService
-from app.application.services.adoption_measurement_service import AdoptionMeasurementService
-from app.application.services.campaign_service import CampaignService
-from app.application.services.campaign_publisher import CampaignPublisher
-from app.application.services.editorial_agents import (
-    CustomerEmailWriterAgent,
-    EditorialStrategyAgent,
-    LinkedInWriterAgent,
-    MarketEditorialStrategyAgent,
-    NewsletterWriterAgent,
-    ProductIntelligenceAgent,
-    QualityControlAgent,
-    SeoQualityAgent,
-    UsageIntelligenceAgent,
-    WebsiteArticleWriterAgent,
-)
+from app.application.services.editorial_engine_v1 import build_editorial_generation_service
 from app.application.services.github_intelligence_service import GitHubIntelligenceService
-from app.application.services.mapsi_usage_collection_service import MapsiUsageCollectionService
-from app.application.services.mautic_contact_sync_service import MauticContactSyncService
-from app.application.services.multichannel_content_service import MultichannelContentService
-from app.application.services.linkedin_metrics_collector import LinkedInMetricsCollector
-from app.application.services.linkedin_oauth_service import LinkedInOAuthService
-from app.application.services.linkedin_organization_resolver import LinkedInOrganizationResolver
-from app.application.services.linkedin_post_publisher import LinkedInPostPublisher
-from app.application.services.linkedin_media_uploader import LinkedInMediaUploader
-from app.application.services.review_portal_service import ReviewPortalService
-from app.application.services.task_worker_service import TaskWorkerService
-from app.application.services.weekly_campaign_generation_service import WeeklyCampaignGenerationService
-from app.core.config import get_mapsi_instances
+from app.application.services.mapsi_news_publisher import MapsiNewsPublisher
+from app.application.services.oling_news_publisher import OlingNewsPublisher
+from app.application.services.simple_campaign_service import ManualEmailPublisher, ManualLinkedInPublisher, SimpleCampaignService
+from app.core.config import get_settings
 from app.core.db import get_db_session
-from app.infrastructure.agents.openai_backend import OpenAIAgentsBackend
-from app.infrastructure.agents.simulated_backend import SimulatedEditorialBackend
-from app.infrastructure.connectors.fakes import (
-    CompositeSimulatedGenerator,
-    CompositeSimulatedPublisher,
-    SimulatedDolibarrConnector,
-    SimulatedGitHubConnector,
-    SimulatedLinkedInConnector,
-    SimulatedMAPSIConnector,
-    SimulatedMauticConnector,
-    SimulatedMicrosoftGraphConnector,
-    SimulatedOlingSiteConnector,
-)
+from app.infrastructure.connectors.fakes import CompositeSimulatedPublisher, OlingMockPublisher, SimulatedMapsiSiteConnector
 from app.infrastructure.connectors.github import GitHubConnector
-from app.infrastructure.connectors.linkedin import LinkedInConnector, build_linkedin_config
-from app.infrastructure.connectors.mautic import MauticConnector, build_mautic_config
-from app.infrastructure.connectors.mapsi_usage import MapsiInstanceConfig, MapsiUsageConnector
+from app.infrastructure.connectors.mapsi_site import MapsiSiteConnector, build_mapsi_site_config
+from app.infrastructure.connectors.oling import OlingConnector, build_oling_config
 from app.infrastructure.repositories.audit import SqlAlchemyAuditLogRepository
-from app.infrastructure.repositories.audience_segments import AudienceSegmentationRepository
 from app.infrastructure.repositories.campaigns import SqlAlchemyCampaignRepository
-from app.infrastructure.repositories.editorial_pipeline import EditorialPipelineRepository
-from app.infrastructure.repositories.mapsi_usage import MapsiUsageRepository
-from app.infrastructure.repositories.mautic_sync import MauticSyncRepository
-from app.infrastructure.repositories.mautic_publications import MauticPublicationRepository
-from app.infrastructure.repositories.linkedin import LinkedInOAuthTokenRepository, LinkedInPublicationRepository
-from app.infrastructure.repositories.review_portal import ReviewPortalRepository
+from app.infrastructure.repositories.mapsi_site_publications import MapsiNewsPublicationRepository
+from app.infrastructure.repositories.oling import OlingNewsPublicationRepository
 from app.infrastructure.repositories.product_intelligence import (
     SqlAlchemyProductChangeRepository,
     SqlAlchemyRepositoryCursorRepository,
@@ -65,37 +26,7 @@ from app.infrastructure.repositories.product_intelligence import (
     SqlAlchemyWebhookDeliveryRepository,
 )
 from app.infrastructure.tasks import RedisTaskQueue
-from app.core.config import get_settings
-
-
-def _build_editorial_backend():
-    if get_settings().editorial_agent_backend == "openai":
-        return OpenAIAgentsBackend()
-    return SimulatedEditorialBackend()
-
-
-def get_campaign_service(session: Session = Depends(get_db_session)) -> CampaignService:
-    settings = get_settings()
-    repository = SqlAlchemyCampaignRepository(session)
-    audit_log = SqlAlchemyAuditLogRepository(session)
-    generator = CompositeSimulatedGenerator(
-        [
-            SimulatedGitHubConnector(),
-            SimulatedMAPSIConnector(),
-            SimulatedMicrosoftGraphConnector(),
-            SimulatedMauticConnector(),
-            SimulatedDolibarrConnector(),
-        ]
-    )
-    publisher = CompositeSimulatedPublisher(
-        {
-            "linkedin": SimulatedLinkedInConnector(),
-            "oling": SimulatedOlingSiteConnector(),
-        }
-    )
-    task_queue = RedisTaskQueue(settings.redis_url, settings.redis_queue_name)
-    review_portal = ReviewPortalService(repository, ReviewPortalRepository(session), audit_log)
-    return CampaignService(repository, generator, publisher, audit_log, task_queue, review_portal=review_portal)
+from app.knowledge import KnowledgeRepository
 
 
 def get_github_intelligence_service(session: Session = Depends(get_db_session)) -> GitHubIntelligenceService:
@@ -112,147 +43,46 @@ def get_github_intelligence_service(session: Session = Depends(get_db_session)) 
     )
 
 
-def get_review_portal_service(session: Session = Depends(get_db_session)) -> ReviewPortalService:
+def get_simple_campaign_service(session: Session = Depends(get_db_session)) -> SimpleCampaignService:
+    settings = get_settings()
     repository = SqlAlchemyCampaignRepository(session)
     audit_log = SqlAlchemyAuditLogRepository(session)
-    return ReviewPortalService(repository, ReviewPortalRepository(session), audit_log)
-
-
-def get_weekly_campaign_generation_service(session: Session = Depends(get_db_session)) -> WeeklyCampaignGenerationService:
-    backend = _build_editorial_backend()
-    return WeeklyCampaignGenerationService(
-        product_agent=ProductIntelligenceAgent(backend),
-        usage_agent=UsageIntelligenceAgent(backend),
-        strategy_agent=EditorialStrategyAgent(backend),
-        writer_agent=CustomerEmailWriterAgent(backend),
-        quality_agent=QualityControlAgent(backend),
-        segmentation_service=AudienceSegmentationService(AudienceSegmentationRepository(session)),
-        repository=EditorialPipelineRepository(session),
-    )
-
-
-def get_mautic_contact_sync_service(session: Session = Depends(get_db_session)) -> MauticContactSyncService:
-    return MauticContactSyncService(
-        connector=MauticConnector(build_mautic_config()),
-        repository=MauticSyncRepository(session),
-        segmentation_service=AudienceSegmentationService(AudienceSegmentationRepository(session)),
-    )
-
-
-def get_mapsi_usage_collection_services(session: Session = Depends(get_db_session)) -> dict[str, MapsiUsageCollectionService]:
-    services: dict[str, MapsiUsageCollectionService] = {}
-    for item in get_mapsi_instances():
-        instance = MapsiInstanceConfig(
-            id=item["id"],
-            base_url=item["base_url"],
-            secret_ref=item["secret_ref"],
-            enabled=bool(item["enabled"]),
+    oling_publisher = (
+        OlingMockPublisher()
+        if settings.oling_mode == "mock" or settings.app_env == "test"
+        else OlingNewsPublisher(
+            campaign_repository=repository,
+            publication_repository=OlingNewsPublicationRepository(session),
+            connector=OlingConnector(build_oling_config(settings)),
+            audit_log=audit_log,
+            review_portal=None,
         )
-        services[instance.id] = MapsiUsageCollectionService(
-            connector=MapsiUsageConnector(instance),
-            repository=MapsiUsageRepository(session),
-            instance_config=instance,
+    )
+    mapsi_publisher = (
+        SimulatedMapsiSiteConnector()
+        if settings.mapsi_site_mode == "mock" or settings.app_env == "test"
+        else MapsiNewsPublisher(
+            campaign_repository=repository,
+            publication_repository=MapsiNewsPublicationRepository(session),
+            connector=MapsiSiteConnector(build_mapsi_site_config()),
+            audit_log=audit_log,
+            review_portal=None,
         )
-    return services
-
-
-def get_task_worker_service(session: Session = Depends(get_db_session)) -> TaskWorkerService:
-    return TaskWorkerService(
-        repository=SqlAlchemyCampaignRepository(session),
-        audit_log=SqlAlchemyAuditLogRepository(session),
-        github_intelligence=get_github_intelligence_service(session),
     )
-
-
-def get_campaign_publisher_service(session: Session = Depends(get_db_session)) -> CampaignPublisher:
-    campaign_repository = SqlAlchemyCampaignRepository(session)
-    audit_log = SqlAlchemyAuditLogRepository(session)
-    return CampaignPublisher(
-        campaign_repository=campaign_repository,
-        review_portal=ReviewPortalService(campaign_repository, ReviewPortalRepository(session), audit_log),
-        segmentation_service=AudienceSegmentationService(AudienceSegmentationRepository(session)),
-        mautic_repository=MauticPublicationRepository(session),
-        mautic_sync_repository=MauticSyncRepository(session),
-        mautic_connector=MauticConnector(build_mautic_config()),
-        audit_log=audit_log,
+    publisher = CompositeSimulatedPublisher(
+        {
+            "linkedin_manual": ManualLinkedInPublisher(),
+            "email_manual": ManualEmailPublisher(),
+            "oling": oling_publisher,
+            "mapsi_site": mapsi_publisher,
+        }
     )
-
-
-def get_adoption_measurement_service(session: Session = Depends(get_db_session)) -> AdoptionMeasurementService:
-    campaign_repository = SqlAlchemyCampaignRepository(session)
-    audit_log = SqlAlchemyAuditLogRepository(session)
-    review_repository = ReviewPortalRepository(session)
-    return AdoptionMeasurementService(
-        campaign_repository=campaign_repository,
-        mautic_publications=MauticPublicationRepository(session),
-        mautic_sync_repository=MauticSyncRepository(session),
-        mapsi_usage_repository=MapsiUsageRepository(session),
-        review_repository=review_repository,
-        mautic_connector=MauticConnector(build_mautic_config()),
-        audit_log=audit_log,
-    )
-
-
-def get_linkedin_oauth_service(session: Session = Depends(get_db_session)) -> LinkedInOAuthService:
-    return LinkedInOAuthService(
-        connector=LinkedInConnector(build_linkedin_config()),
-        repository=LinkedInOAuthTokenRepository(session),
-    )
-
-
-def get_linkedin_organization_resolver(session: Session = Depends(get_db_session)) -> LinkedInOrganizationResolver:
-    connector = LinkedInConnector(build_linkedin_config())
-    oauth_service = LinkedInOAuthService(connector=connector, repository=LinkedInOAuthTokenRepository(session))
-    return LinkedInOrganizationResolver(connector=connector, oauth_service=oauth_service)
-
-
-def get_linkedin_media_uploader(session: Session = Depends(get_db_session)) -> LinkedInMediaUploader:
-    connector = LinkedInConnector(build_linkedin_config())
-    oauth_service = LinkedInOAuthService(connector=connector, repository=LinkedInOAuthTokenRepository(session))
-    resolver = LinkedInOrganizationResolver(connector=connector, oauth_service=oauth_service)
-    return LinkedInMediaUploader(connector=connector, oauth_service=oauth_service, organization_resolver=resolver)
-
-
-def get_linkedin_post_publisher(session: Session = Depends(get_db_session)) -> LinkedInPostPublisher:
-    repository = SqlAlchemyCampaignRepository(session)
-    audit_log = SqlAlchemyAuditLogRepository(session)
-    connector = LinkedInConnector(build_linkedin_config())
-    oauth_service = LinkedInOAuthService(connector=connector, repository=LinkedInOAuthTokenRepository(session))
-    resolver = LinkedInOrganizationResolver(connector=connector, oauth_service=oauth_service)
-    return LinkedInPostPublisher(
-        campaign_repository=repository,
-        publication_repository=LinkedInPublicationRepository(session),
-        oauth_service=oauth_service,
-        organization_resolver=resolver,
-        connector=connector,
-        audit_log=audit_log,
-    )
-
-
-def get_linkedin_metrics_collector(session: Session = Depends(get_db_session)) -> LinkedInMetricsCollector:
-    repository = SqlAlchemyCampaignRepository(session)
-    audit_log = SqlAlchemyAuditLogRepository(session)
-    connector = LinkedInConnector(build_linkedin_config())
-    oauth_service = LinkedInOAuthService(connector=connector, repository=LinkedInOAuthTokenRepository(session))
-    return LinkedInMetricsCollector(
-        campaign_repository=repository,
-        publication_repository=LinkedInPublicationRepository(session),
-        oauth_service=oauth_service,
-        connector=connector,
-        audit_log=audit_log,
-    )
-
-
-def get_multichannel_content_service(session: Session = Depends(get_db_session)) -> MultichannelContentService:
-    backend = _build_editorial_backend()
-    repository = SqlAlchemyCampaignRepository(session)
-    audit_log = SqlAlchemyAuditLogRepository(session)
-    return MultichannelContentService(
+    return SimpleCampaignService(
         repository=repository,
-        review_portal=ReviewPortalService(repository, ReviewPortalRepository(session), audit_log),
-        market_strategy_agent=MarketEditorialStrategyAgent(backend),
-        newsletter_writer=NewsletterWriterAgent(backend),
-        linkedin_writer=LinkedInWriterAgent(backend),
-        website_writer=WebsiteArticleWriterAgent(backend),
-        seo_quality_agent=SeoQualityAgent(backend),
+        publisher=publisher,
+        audit_log=audit_log,
+        task_queue=RedisTaskQueue(settings.redis_url, settings.redis_queue_name),
+        project_root=Path(__file__).resolve().parents[3],
+        editorial_service=build_editorial_generation_service(session),
+        knowledge_repository=KnowledgeRepository(session),
     )

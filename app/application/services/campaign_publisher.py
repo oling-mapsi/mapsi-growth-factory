@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from app.application.services.audience_segmentation_service import AudienceSegmentationService
+from app.application.services.operation_mode_service import OperationModeService
 from app.application.services.review_portal_service import ReviewPortalService
 from app.core.config import get_settings
 from app.domain.entities import CampaignRun, MauticCampaignPublication, Publication
@@ -16,6 +17,7 @@ from app.infrastructure.connectors.mautic import MauticConnector
 from app.infrastructure.observability import structured_log
 from app.infrastructure.repositories.audit import SqlAlchemyAuditLogRepository
 from app.infrastructure.repositories.campaigns import SqlAlchemyCampaignRepository
+from app.infrastructure.repositories.channel_operational_state import ChannelOperationalStateRepository
 from app.infrastructure.repositories.mautic_publications import MauticPublicationRepository
 from app.infrastructure.repositories.mautic_sync import MauticSyncRepository
 
@@ -40,6 +42,7 @@ class CampaignPublisher:
         self.mautic_connector = mautic_connector
         self.audit_log = audit_log
         self.settings = get_settings()
+        self.operation_mode = OperationModeService()
 
     def create_preview(self, campaign_id: str, *, idempotency_key: str = "") -> dict:
         campaign, review, publication, contacts = self._prepare_context(campaign_id, idempotency_key=idempotency_key)
@@ -78,8 +81,11 @@ class CampaignPublisher:
         publication = self.mautic_repository.save(publication)
         self.audit_log.append(
             campaign.id,
-            "campaign.mautic_preview_created",
+            "publication.preview_created",
             {"mautic_campaign_id": publication.mautic_campaign_id, "targeted_contacts": publication.targeted_contacts},
+            actor_source="system",
+            channel="mautic",
+            result="SUCCESS",
         )
         return self._serialize(publication)
 
@@ -115,8 +121,11 @@ class CampaignPublisher:
             self.campaign_repository.save(campaign)
         self.audit_log.append(
             campaign.id,
-            "campaign.mautic_scheduled",
+            "publication.scheduled",
             {"mautic_campaign_id": publication.mautic_campaign_id, "scheduled_at": publication.scheduled_at.isoformat()},
+            actor_source="system",
+            channel="mautic",
+            result="SUCCESS",
         )
         structured_log("campaign.mautic_scheduled", campaign_id=campaign.id, mautic_campaign_id=publication.mautic_campaign_id)
         return {**preview, **self._serialize(publication)}
@@ -127,6 +136,7 @@ class CampaignPublisher:
         *,
         idempotency_key: str,
     ) -> tuple[CampaignRun, object, MauticCampaignPublication, list[dict]]:
+        self.operation_mode.assert_real_mapsi_users_audience_disabled()
         campaign = self.campaign_repository.get(campaign_id)
         if campaign is None:
             raise CampaignNotFoundError(f"Campaign {campaign_id} not found.")
@@ -173,7 +183,16 @@ class CampaignPublisher:
             raise CampaignPublicationForbiddenError("DNC verification failed just before scheduling.")
 
     def _enforce_kill_switches(self, contacts: list[dict]) -> None:
-        if self.settings.workflow_kill_switch:
+        operational = ChannelOperationalStateRepository(self.campaign_repository.session)
+        if not operational.is_channel_feature_enabled(
+            channel="mautic",
+            static_default=True,
+            safe_default_enabled=self.settings.channel_operational_safe_default_enabled,
+        ):
+            raise CampaignPublicationForbiddenError("MAUTIC publication channel is disabled.")
+        if operational.is_channel_kill_switch_active("mautic"):
+            raise EmergencyStopActiveError("Channel publication kill switch is active.")
+        if operational.is_global_kill_switch_active(static_default=self.settings.workflow_kill_switch):
             raise EmergencyStopActiveError("Global publication kill switch is active.")
         blocked_instances = {item.strip() for item in self.settings.publication_instance_kill_switches.split(",") if item.strip()}
         blocked_clients = {item.strip() for item in self.settings.publication_client_kill_switches.split(",") if item.strip()}

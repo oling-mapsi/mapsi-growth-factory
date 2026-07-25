@@ -3,10 +3,8 @@ import logging
 from fastapi import FastAPI
 
 from app.contracts import read_contract_metadata
-from app.entrypoints.api.routes.campaigns import router as campaigns_router
 from app.entrypoints.api.routes.github_webhooks import router as github_webhooks_router
-from app.entrypoints.api.routes.operations import router as operations_router
-from app.entrypoints.api.routes.review_portal import router as review_portal_router
+from app.entrypoints.api.routes.simple_campaigns import router as simple_campaigns_router
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +16,8 @@ def create_app() -> FastAPI:
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
-    app.include_router(campaigns_router)
-    app.include_router(operations_router)
     app.include_router(github_webhooks_router)
-    app.include_router(review_portal_router)
+    app.include_router(simple_campaigns_router)
 
     @app.on_event("startup")
     def log_contract_sha() -> None:

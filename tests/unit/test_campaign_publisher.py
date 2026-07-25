@@ -190,3 +190,20 @@ def test_schedule_blocks_with_instance_kill_switch(session, monkeypatch) -> None
 
     monkeypatch.delenv("PUBLICATION_INSTANCE_KILL_SWITCHES", raising=False)
     get_settings.cache_clear()
+
+
+def test_schedule_blocks_real_mapsi_users_audience_in_pilot_mode(session, monkeypatch) -> None:
+    seed_contact(session)
+    campaign_id = seed_campaign_review(session)
+    monkeypatch.setenv("GROWTH_OPERATION_MODE", "pilot")
+    get_settings.cache_clear()
+
+    with pytest.raises(CampaignPublicationForbiddenError, match="Pilot mode"):
+        build_service(session).schedule_campaign(
+            campaign_id,
+            scheduled_at=datetime.now(UTC) + timedelta(hours=1),
+            idempotency_key="schedule-pilot-1",
+        )
+
+    monkeypatch.delenv("GROWTH_OPERATION_MODE", raising=False)
+    get_settings.cache_clear()

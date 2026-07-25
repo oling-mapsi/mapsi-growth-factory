@@ -1,0 +1,48 @@
+- feature_id: dashboard-indicators-export
+  module: dashboard
+  title: Export des indicateurs du tableau utilisateur
+  short_description: Exporter les indicateurs visibles depuis le tableau utilisateur.
+  business_problem: Eviter un retraitement manuel pour partager ou analyser les indicateurs visibles dans MAPSI.
+  functional_description: Les responsables peuvent exporter les indicateurs visibles depuis le tableau utilisateur.
+  user_benefits:
+    - Recuperer plus vite les indicateurs affiches dans le tableau utilisateur.
+    - Repartir d'un export existant au lieu de recopier les donnees manuellement.
+  typical_use_cases:
+    - Preparer un partage interne a partir du tableau utilisateur.
+    - Conserver un point de sortie simple pour des indicateurs visibles dans MAPSI.
+  target_roles:
+    - responsable
+    - manager
+  communication_priority: 10
+  communication_enabled: true
+  minimum_repeat_delay_days: 21
+  source_references:
+    - contracts/mapsi/examples/product-change.example.json
+    - tests/unit/test_mapsi_product_changes_service.py
+  forbidden_claims:
+    - Ne pas promettre un reporting automatise de bout en bout si seul l'export est confirme.
+    - Ne pas annoncer des integrations BI ou bureautiques non documentees.
+- feature_id: courbex-activity-export
+  module: courbex
+  title: Export synthetique des activites Courbex
+  short_description: Export dedie pour un resume d'activite Courbex.
+  business_problem: Donner un point de sortie simple pour synthetiser l'activite Courbex sans recomposer un recapitulatif a la main.
+  functional_description: Un export dedie est disponible pour produire un resume d'activite Courbex.
+  user_benefits:
+    - Produire un resume d'activite Courbex plus rapidement.
+    - Disposer d'un export natif confirme par le contrat de changements produit.
+  typical_use_cases:
+    - Partager un recapitulatif d'activite Courbex.
+    - Conserver une trace exportable d'une activite visible dans Courbex.
+  target_roles:
+    - manager
+    - administrator
+  communication_priority: 20
+  communication_enabled: true
+  minimum_repeat_delay_days: 21
+  source_references:
+    - tests/unit/test_mapsi_product_changes_service.py
+    - app/generated/mapsi_contract_models.py
+  forbidden_claims:
+    - Ne pas decrire le contenu exact de l'export au-dela du resume d'activite confirme.
+    - Ne pas promettre une couverture multi-modules non prouvee.

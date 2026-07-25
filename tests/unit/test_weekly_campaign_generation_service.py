@@ -84,8 +84,8 @@ def seed_product_data(session) -> None:
     )
 
 
-def build_service(session, responses) -> WeeklyCampaignGenerationService:
-    backend = FakeStructuredAgentBackend(responses)
+def build_service(session, responses, *, provider_type: str = "fake") -> WeeklyCampaignGenerationService:
+    backend = FakeStructuredAgentBackend(responses, provider_type=provider_type)
     segmentation = AudienceSegmentationService(AudienceSegmentationRepository(session))
     repository = EditorialPipelineRepository(session)
     return WeeklyCampaignGenerationService(
@@ -154,8 +154,65 @@ def test_generate_weekly_campaign_dry_run(session) -> None:
     assert report["objective"] == "feature_adoption"
     assert report["audience_segment_id"] == "risk_managers"
     assert report["quality"]["passed"] is True
-    assert report["evaluations"]["absence_of_personal_data"] is True
+    assert report["evaluations"]["absence_of_personal_data"]["passed"] is True
+    assert report["engine"]["consumption"]["used_tokens"] > 0
     assert service.repository.count_agent_logs() == 5
+
+
+def test_generate_weekly_campaign_marks_real_mode_when_openai_provider_is_used(session) -> None:
+    seed_segment_data(session)
+    seed_product_data(session)
+    evidence_id = session.query(SourceEvidenceModel).one().id
+    service = build_service(
+        session,
+        [
+            {
+                "candidates": [
+                    {
+                        "capability_key": "risk",
+                        "candidate_feature": "Creer un plan d'action depuis un risque",
+                        "user_benefit": "Eviter la double saisie",
+                        "evidence_ids": [evidence_id],
+                        "restrictions": [],
+                    }
+                ]
+            },
+            {
+                "recommendations": [
+                    {
+                        "segment_id": "risk_managers",
+                        "usage_problem": "Les plans d'action sont peu ouverts.",
+                        "education_opportunity": "Montrer le lien risque-action.",
+                    }
+                ]
+            },
+            {
+                "topic": "Creer un plan d'action depuis un risque",
+                "objective": "feature_adoption",
+                "audience_segment_id": "risk_managers",
+                "evidence_ids": [evidence_id],
+                "key_messages": ["Eviter la double saisie", "Conserver le lien entre risque et action"],
+                "cta_type": "open_feature",
+            },
+            {
+                "subject": "Creer un plan d'action depuis un risque",
+                "preheader": "Activez une pratique simple",
+                "headline": "Creer un plan d'action depuis un risque",
+                "introduction": "Un cas d'usage utile cette semaine.",
+                "body_html": "<p>Un cas d'usage utile cette semaine.</p>",
+                "body_text": "Un cas d'usage utile cette semaine.",
+                "cta_label": "Ouvrir la fonctionnalite",
+                "cta_url_template": "https://mapsi.example/risk",
+                "evidence_ids": [evidence_id],
+            },
+            {"passed": True, "issues": []},
+        ],
+        provider_type="openai",
+    )
+
+    report = service.generate(dry_run=True)
+
+    assert report["engine"]["mode"] == "real"
 
 
 def test_generate_weekly_campaign_blocks_on_repeated_theme(session) -> None:

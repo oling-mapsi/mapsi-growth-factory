@@ -19,6 +19,15 @@ class CampaignRunModel(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     objective: Mapped[str] = mapped_column(Text, nullable=False)
+    theme: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    campaign_type: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    workflow_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="LEGACY")
+    selected_channels: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    weekly_pack_id: Mapped[str] = mapped_column(String(36), nullable=False, default="")
+    week_reference: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    week_year: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    week_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pilot_mode: Mapped[bool] = mapped_column(nullable=False, default=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
@@ -61,6 +70,108 @@ class CampaignRunModel(Base):
     )
 
 
+class WeeklyCommunicationPackModel(Base):
+    __tablename__ = "weekly_communication_packs"
+    __table_args__ = (UniqueConstraint("year", "week_number", name="uq_weekly_communication_packs_year_week"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    week_reference: Mapped[str] = mapped_column(String(32), nullable=False)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    week_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="NOT_STARTED")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    campaign_ids: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    global_summary: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    operational_errors: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    pilot_mode: Mapped[bool] = mapped_column(nullable=False, default=False)
+
+
+class FeatureCommunicationCatalogModel(Base):
+    __tablename__ = "feature_communication_catalog"
+
+    feature_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    module: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    functional_description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    user_benefit: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    target_roles: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    target_modules: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    minimum_version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    availability: Mapped[str] = mapped_column(String(64), nullable=False, default="general")
+    deep_link_template: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    communication_priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    last_communicated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    minimum_repeat_delay: Mapped[int] = mapped_column(Integer, nullable=False, default=14)
+    source_evidence_ids: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
+
+
+class EditorialSourcePackModel(Base):
+    __tablename__ = "editorial_source_packs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    weekly_pack_id: Mapped[str] = mapped_column(String(36), nullable=False, default="")
+    campaign_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="DRAFT")
+    confidentiality_level: Mapped[str] = mapped_column(String(32), nullable=False, default="INTERNAL")
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    validated_by: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    items: Mapped[list[EditorialSourceItemModel]] = relationship(
+        cascade="all, delete-orphan",
+    )
+
+
+class EditorialSourceItemModel(Base):
+    __tablename__ = "editorial_source_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    source_pack_id: Mapped[str] = mapped_column(ForeignKey("editorial_source_packs.id"), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_reference: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    source_title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    source_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_author: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    factual_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    usable_facts: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    anonymized_facts: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    prohibited_facts: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    client_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    client_name_usage_authorized: Mapped[bool] = mapped_column(nullable=False, default=False)
+    confidentiality_level: Mapped[str] = mapped_column(String(32), nullable=False, default="INTERNAL")
+    evidence_quality: Mapped[str] = mapped_column(String(32), nullable=False, default="medium")
+    source_url: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    external_source_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    manual_input: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    attachments: Mapped[list[EditorialSourceAttachmentReferenceModel]] = relationship(
+        back_populates="source_item",
+        cascade="all, delete-orphan",
+    )
+
+
+class EditorialSourceAttachmentReferenceModel(Base):
+    __tablename__ = "editorial_source_attachment_references"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    source_item_id: Mapped[str] = mapped_column(ForeignKey("editorial_source_items.id"), nullable=False)
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    media_type: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    storage_reference: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    source_url: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    source_item: Mapped[EditorialSourceItemModel] = relationship(back_populates="attachments")
+
+
 class EditorialBriefModel(Base):
     __tablename__ = "editorial_briefs"
 
@@ -79,19 +190,55 @@ class ContentAssetModel(Base):
     campaign_run_id: Mapped[str] = mapped_column(ForeignKey("campaign_runs.id"), nullable=False)
     asset_type: Mapped[str] = mapped_column(String(64), nullable=False)
     channel: Mapped[str] = mapped_column(String(64), nullable=False)
+    locale: Mapped[str] = mapped_column(String(16), nullable=False, default="fr-FR")
     title: Mapped[str] = mapped_column(String(255), nullable=False)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    content_html: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    content_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    excerpt: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    call_to_action: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    target_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
     evidence_ids: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    source_evidence_ids: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     audience_segment_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    content_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    approved_content_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     approved_by: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    external_publication_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    external_publication_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    last_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     results: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     campaign: Mapped[CampaignRunModel] = relationship(back_populates="content_assets")
+
+
+class AssetRevisionSnapshotModel(Base):
+    __tablename__ = "asset_revision_snapshots"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    content_asset_id: Mapped[str] = mapped_column(ForeignKey("content_assets.id"), nullable=False)
+    campaign_run_id: Mapped[str] = mapped_column(ForeignKey("campaign_runs.id"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    subject: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    content_html: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    content_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    excerpt: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    call_to_action: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    target_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    approved_content_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    results: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
 class AudienceSegmentModel(Base):
@@ -122,8 +269,10 @@ class PublicationModel(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     campaign_run_id: Mapped[str] = mapped_column(ForeignKey("campaign_runs.id"), nullable=False)
+    content_asset_id: Mapped[str] = mapped_column(String(36), nullable=False, default="")
     channel: Mapped[str] = mapped_column(String(64), nullable=False)
     external_reference: Mapped[str] = mapped_column(String(255), nullable=False)
+    external_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     campaign: Mapped[CampaignRunModel] = relationship(back_populates="publications")
 
@@ -468,6 +617,72 @@ class LinkedInPublicationModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+class OlingNewsPublicationModel(Base):
+    __tablename__ = "oling_news_publications"
+    __table_args__ = (
+        UniqueConstraint("content_asset_id", "content_hash", name="uq_oling_news_publications_asset_hash"),
+        UniqueConstraint("external_id", name="uq_oling_news_publications_external_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    campaign_run_id: Mapped[str] = mapped_column(ForeignKey("campaign_runs.id"), nullable=False)
+    content_asset_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(190), nullable=False, default="")
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    mode: Mapped[str] = mapped_column(String(32), nullable=False, default="mock")
+    publication_mode_requested: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    publication_mode_executed: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    publisher_type: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    publication_status: Mapped[str] = mapped_column(String(32), nullable=False, default="DRAFT")
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    preview_url: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    public_url: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    public_slug: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    draft_revision_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    published_revision_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    published_content_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    unpublished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    metrics: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class MapsiNewsPublicationModel(Base):
+    __tablename__ = "mapsi_news_publications"
+    __table_args__ = (
+        UniqueConstraint("content_asset_id", "content_hash", name="uq_mapsi_news_publications_asset_hash"),
+        UniqueConstraint("external_id", name="uq_mapsi_news_publications_external_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    campaign_run_id: Mapped[str] = mapped_column(ForeignKey("campaign_runs.id"), nullable=False)
+    content_asset_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(190), nullable=False, default="")
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    mode: Mapped[str] = mapped_column(String(32), nullable=False, default="mock")
+    publication_mode_requested: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    publication_mode_executed: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    publisher_type: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    publication_status: Mapped[str] = mapped_column(String(32), nullable=False, default="DRAFT")
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    preview_url: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    public_url: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    public_slug: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    draft_revision_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    published_revision_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    published_content_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    unpublished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    metrics: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 class EditorialThemeHistoryModel(Base):
     __tablename__ = "editorial_theme_history"
 
@@ -537,11 +752,24 @@ class AuditLogModel(Base):
     __tablename__ = "audit_logs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    campaign_run_id: Mapped[str] = mapped_column(ForeignKey("campaign_runs.id"), nullable=False)
+    campaign_run_id: Mapped[str | None] = mapped_column(ForeignKey("campaign_runs.id"), nullable=True)
+    content_asset_id: Mapped[str] = mapped_column(String(36), nullable=False, default="")
     event_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    actor_source: Mapped[str] = mapped_column(String(64), nullable=False, default="system")
+    actor_roles: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    channel: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    result: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    source_ip: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    previous_state: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    new_state: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    previous_integrity_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    integrity_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    campaign: Mapped[CampaignRunModel] = relationship(back_populates="audit_logs")
+    campaign: Mapped[CampaignRunModel | None] = relationship(back_populates="audit_logs")
 
 
 class IdempotencyKeyModel(Base):
@@ -555,4 +783,71 @@ class IdempotencyKeyModel(Base):
     request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     response_status: Mapped[int] = mapped_column(Integer, nullable=False)
     response_body: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class StudioAdminJtiModel(Base):
+    __tablename__ = "studio_admin_jti_records"
+    __table_args__ = (UniqueConstraint("jti", name="uq_studio_admin_jti_records_jti"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    jti: Mapped[str] = mapped_column(String(255), nullable=False)
+    issuer: Mapped[str] = mapped_column(String(255), nullable=False)
+    audience: Mapped[str] = mapped_column(String(255), nullable=False)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    key_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class StudioAdminAccessAuditModel(Base):
+    __tablename__ = "studio_admin_access_audits"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    actor_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    actor_roles: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    actor_permissions: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False, default="mapsi-studio")
+    jti: Mapped[str] = mapped_column(String(255), nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    source_ip: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    path: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    method: Mapped[str] = mapped_column(String(16), nullable=False, default="GET")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class ChannelOperationalStateModel(Base):
+    __tablename__ = "channel_operational_states"
+    __table_args__ = (UniqueConstraint("channel", name="uq_channel_operational_states_channel"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    channel: Mapped[str] = mapped_column(String(64), nullable=False)
+    feature_enabled: Mapped[bool] = mapped_column(nullable=False, default=False)
+    feature_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    emergency_kill_switch: Mapped[bool] = mapped_column(nullable=False, default=False)
+    last_health_check: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    updated_by: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class GlobalOperationalStateModel(Base):
+    __tablename__ = "global_operational_states"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    global_kill_switch: Mapped[bool] = mapped_column(nullable=False, default=False)
+    updated_by: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class ChannelOperationalAuditModel(Base):
+    __tablename__ = "channel_operational_audits"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    scope: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    correlation_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.domain.entities import SourceEvidence
 from app.infrastructure.db.models import (
     AgentExecutionLogModel,
+    ContentAssetModel,
     EditorialThemeHistoryModel,
     ProductChangeModel,
     SourceEvidenceModel,
@@ -73,6 +74,27 @@ class EditorialPipelineRepository:
                 "topic": row.topic,
                 "objective": row.objective,
                 "audience_segment_id": row.audience_segment_id,
+                "created_at": row.created_at,
+            }
+            for row in rows
+        ]
+
+    def list_recent_article_history(self, limit: int = 20) -> list[dict]:
+        rows = (
+            self.session.query(ContentAssetModel)
+            .filter(ContentAssetModel.asset_type.in_(("oling_news_article", "mapsi_news_article", "website_article")))
+            .order_by(ContentAssetModel.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "topic": row.title,
+                "objective": "published_article",
+                "audience_segment_id": row.audience_segment_id or "",
+                "title": row.title,
+                "slug": row.results.get("editorial_article", {}).get("slug", "") if row.results else "",
+                "excerpt": row.excerpt or "",
                 "created_at": row.created_at,
             }
             for row in rows
