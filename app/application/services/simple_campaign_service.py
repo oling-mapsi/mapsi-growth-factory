@@ -28,14 +28,15 @@ from app.knowledge.models import MapsiFeature, OlingPractice
 SIMPLE_WORKFLOW_KIND = "SIMPLE"
 SIMPLE_CAMPAIGN_TYPES = {"MAPSI_USERS", "MAPSI_MARKETING", "OLING"}
 SIMPLE_CHANNEL_RULES: dict[str, set[str]] = {
-    "MAPSI_USERS": {"mapsi_site", "linkedin_manual"},
-    "MAPSI_MARKETING": {"mapsi_site", "oling_site", "linkedin_manual"},
-    "OLING": {"oling_site", "linkedin_manual"},
+    "MAPSI_USERS": {"mapsi_site", "linkedin_manual", "email_manual"},
+    "MAPSI_MARKETING": {"mapsi_site", "oling_site", "linkedin_manual", "email_manual"},
+    "OLING": {"oling_site", "linkedin_manual", "email_manual"},
 }
 CHANNEL_TO_INTERNAL = {
     "mapsi_site": "mapsi_site",
     "oling_site": "oling",
     "linkedin_manual": "linkedin_manual",
+    "email_manual": "email_manual",
 }
 CHANNEL_FROM_INTERNAL = {value: key for key, value in CHANNEL_TO_INTERNAL.items()}
 
@@ -74,6 +75,35 @@ class ManualLinkedInPublisher(PublisherPort):
             content_asset_id=asset.id,
             channel=asset.channel,
             external_reference=f"linkedin-manual:{asset.id}",
+            external_url="",
+        )
+
+    def update(self, campaign: CampaignRun, asset: ContentAsset) -> Publication:
+        return self.publish(campaign, asset)
+
+    def unpublish(self, campaign: CampaignRun, asset: ContentAsset) -> bool:
+        return True
+
+    def get_publication_status(self, campaign: CampaignRun, asset: ContentAsset) -> dict:
+        return {"campaign_id": campaign.id, "asset_id": asset.id, "status": "manual"}
+
+    def collect_metrics(self, campaign: CampaignRun, asset: ContentAsset) -> dict:
+        return {"campaign_id": campaign.id, "asset_id": asset.id, "status": "manual"}
+
+
+class ManualEmailPublisher(PublisherPort):
+    def validate_configuration(self, channel: str) -> dict:
+        return {"channel": channel, "enabled": True, "manual": True}
+
+    def create_preview(self, campaign: CampaignRun, asset: ContentAsset) -> dict:
+        return {"campaign_id": campaign.id, "asset_id": asset.id, "channel": asset.channel, "preview": asset.content_text}
+
+    def publish(self, campaign: CampaignRun, asset: ContentAsset) -> Publication:
+        return Publication(
+            campaign_run_id=campaign.id,
+            content_asset_id=asset.id,
+            channel=asset.channel,
+            external_reference=f"email-manual:{asset.id}",
             external_url="",
         )
 
@@ -213,6 +243,8 @@ class SimpleCampaignService:
             assets.append(self._asset_from_editorial_result(campaign, "oling_site", results["oling_site"], evidence))
         if "linkedin_manual" in campaign.selected_channels:
             assets.append(self._linkedin_asset_from_editorial(campaign, primary_result, evidence))
+        if "email_manual" in campaign.selected_channels:
+            assets.append(self._email_asset_from_editorial(campaign, primary_result, evidence))
         brief = EditorialBrief(
             campaign_run_id=campaign.id,
             title=primary_result.record.article.title,
@@ -652,6 +684,42 @@ class SimpleCampaignService:
         asset.ensure_content_hash()
         return asset
 
+    def _email_asset_from_editorial(
+        self,
+        campaign: CampaignRun,
+        result: EditorialGenerationResult,
+        evidence: list[SourceEvidence],
+    ) -> ContentAsset:
+        article = result.record.article
+        evidence_ids = [
+            item.id
+            for item in evidence
+            if str(item.payload.get("source_id", "")) in set(article.source_ids)
+        ]
+        body_text = self._build_email_from_article(campaign, article)
+        asset = ContentAsset(
+            campaign_run_id=campaign.id,
+            asset_type="email_manual_message",
+            channel=CHANNEL_TO_INTERNAL["email_manual"],
+            locale="fr-FR",
+            title=self._email_subject_from_article(campaign, article),
+            content_html=self._build_email_html(campaign, article),
+            content_text=body_text,
+            excerpt=article.excerpt,
+            call_to_action=article.call_to_action_label,
+            target_url=article.call_to_action_url,
+            audience_segment_id=campaign.campaign_type.casefold(),
+            source_evidence_ids=evidence_ids,
+            evidence_ids=evidence_ids,
+            results={
+                "source_article": article.model_dump(mode="json"),
+                "illustration_suggestion": self._editorial_image_suggestion(campaign, article),
+                "manual_send": True,
+            },
+        )
+        asset.ensure_content_hash()
+        return asset
+
     def _build_linkedin_from_article(self, campaign: CampaignRun, article) -> str:
         highlights = [claim.text for claim in article.claims[:2] if claim.text.strip()]
         while len(highlights) < 2:
@@ -664,6 +732,43 @@ class SimpleCampaignService:
             f"Angle : {campaign.theme}\n\n"
             f"Visuel suggere : {self._editorial_image_suggestion(campaign, article)}\n\n"
             f"{article.call_to_action_label} : {article.call_to_action_url}"
+        )
+
+    def _email_subject_from_article(self, campaign: CampaignRun, article) -> str:
+        if campaign.campaign_type == "MAPSI_USERS":
+            return f"MAPSI : {campaign.theme}"
+        if campaign.campaign_type == "MAPSI_MARKETING":
+            return f"Communication MAPSI : {campaign.theme}"
+        return f"OLING : {campaign.theme}"
+
+    def _build_email_from_article(self, campaign: CampaignRun, article) -> str:
+        claims = [claim.text.strip() for claim in article.claims[:3] if claim.text.strip()]
+        while len(claims) < 3:
+            claims.append(article.excerpt)
+        return (
+            f"Objet : {self._email_subject_from_article(campaign, article)}\n\n"
+            "Bonjour,\n\n"
+            f"{article.excerpt}\n\n"
+            f"{claims[0]}\n\n"
+            f"{claims[1]}\n\n"
+            f"{claims[2]}\n\n"
+            f"Si le sujet vous interesse, {article.call_to_action_label.lower()} : {article.call_to_action_url}\n\n"
+            "Bien cordialement,"
+        )
+
+    def _build_email_html(self, campaign: CampaignRun, article) -> str:
+        claims = [claim.text.strip() for claim in article.claims[:3] if claim.text.strip()]
+        while len(claims) < 3:
+            claims.append(article.excerpt)
+        return (
+            f"<p><strong>Objet :</strong> {self._email_subject_from_article(campaign, article)}</p>"
+            "<p>Bonjour,</p>"
+            f"<p>{article.excerpt}</p>"
+            f"<p>{claims[0]}</p>"
+            f"<p>{claims[1]}</p>"
+            f"<p>{claims[2]}</p>"
+            f"<p>{article.call_to_action_label} : <a href=\"{article.call_to_action_url}\">{article.call_to_action_url}</a></p>"
+            "<p>Bien cordialement,</p>"
         )
 
     def _editorial_image_suggestion(self, campaign: CampaignRun, article) -> str:
@@ -731,6 +836,25 @@ class SimpleCampaignService:
                         source_evidence_ids=evidence_ids,
                         evidence_ids=evidence_ids,
                         results={"illustration_suggestion": self._image_suggestion(campaign, channel)},
+                    )
+                )
+                continue
+            if channel == "email_manual":
+                assets.append(
+                    ContentAsset(
+                        campaign_run_id=campaign.id,
+                        asset_type="email_manual_message",
+                        channel=internal_channel,
+                        locale="fr-FR",
+                        title=self._build_email_subject(campaign),
+                        content_html=self._build_email_html_from_campaign(campaign),
+                        content_text=self._build_email_text(campaign),
+                        excerpt=self._summary_excerpt(campaign, channel),
+                        call_to_action=self._call_to_action(campaign, channel),
+                        audience_segment_id="",
+                        source_evidence_ids=evidence_ids,
+                        evidence_ids=evidence_ids,
+                        results={"manual_send": True, "illustration_suggestion": self._image_suggestion(campaign, channel)},
                     )
                 )
                 continue
@@ -806,6 +930,39 @@ class SimpleCampaignService:
             f"{self._linkedin_close(campaign)}"
         )
 
+    def _build_email_subject(self, campaign: CampaignRun) -> str:
+        if campaign.campaign_type == "MAPSI_USERS":
+            return f"MAPSI : {campaign.theme}"
+        if campaign.campaign_type == "MAPSI_MARKETING":
+            return f"Communication MAPSI : {campaign.theme}"
+        return f"OLING : {campaign.theme}"
+
+    def _build_email_text(self, campaign: CampaignRun) -> str:
+        bullets = self._bullet_points(campaign, "email_manual")[:3]
+        return (
+            f"Objet : {self._build_email_subject(campaign)}\n\n"
+            "Bonjour,\n\n"
+            f"{self._article_intro(campaign, 'email_manual')}\n\n"
+            f"{self._article_promise(campaign)}\n\n"
+            f"- {bullets[0]}\n"
+            f"- {bullets[1]}\n"
+            f"- {bullets[2]}\n\n"
+            f"Prochaine etape : {self._call_to_action(campaign, 'email_manual')}\n\n"
+            "Bien cordialement,"
+        )
+
+    def _build_email_html_from_campaign(self, campaign: CampaignRun) -> str:
+        bullets = "".join(f"<li>{item}</li>" for item in self._bullet_points(campaign, "email_manual")[:3])
+        return (
+            f"<p><strong>Objet :</strong> {self._build_email_subject(campaign)}</p>"
+            "<p>Bonjour,</p>"
+            f"<p>{self._article_intro(campaign, 'email_manual')}</p>"
+            f"<p>{self._article_promise(campaign)}</p>"
+            f"<ul>{bullets}</ul>"
+            f"<p><strong>Prochaine etape :</strong> {self._call_to_action(campaign, 'email_manual')}</p>"
+            "<p>Bien cordialement,</p>"
+        )
+
     def _article_intro(self, campaign: CampaignRun, channel: str) -> str:
         if campaign.campaign_type == "MAPSI_USERS":
             return f"Cette communication met l'accent sur {campaign.theme} pour aider les utilisateurs MAPSI a aller droit au but."
@@ -866,6 +1023,8 @@ class SimpleCampaignService:
             if campaign.campaign_type == "MAPSI_MARKETING":
                 return "Inviter le lecteur a explorer la complementarite produit-service et a demander un echange de cadrage."
             return "Inviter le lecteur a prendre rendez-vous, cadrer son besoin ou demander un premier echange."
+        if channel == "email_manual":
+            return "Envoyer manuellement l'email a la cible retenue avec un objet clair et un angle editorial direct."
         if campaign.campaign_type == "MAPSI_USERS":
             return "Publier manuellement sur LinkedIn avec un ton utile, simple et centre adoption."
         if campaign.campaign_type == "MAPSI_MARKETING":
@@ -885,7 +1044,11 @@ class SimpleCampaignService:
                 return "Ton recommande : conseil, structurant, axe sur la complementarite entre produit, projet et accompagnement."
             if channel == "linkedin_manual":
                 return "Ton recommande : impact, preuve, credibilite, sans surpromesse."
+            if channel == "email_manual":
+                return "Ton recommande : professionnel, direct, personnalise, avec une progression claire du sujet vers l'action."
             return "Ton recommande : valeur, clarte, demonstration par les usages et la execution."
+        if channel == "email_manual":
+            return "Ton recommande : expert, clair, relationnel, structure pour faciliter une prise de contact simple."
         if channel == "linkedin_manual":
             return "Ton recommande : expert, accessible, sobre, axe decision et confiance."
         return "Ton recommande : conseil metier, structuration, hauteur de vue et concretisation."

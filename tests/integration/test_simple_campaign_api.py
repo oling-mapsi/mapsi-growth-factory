@@ -13,7 +13,7 @@ def test_simple_campaign_lifecycle(client) -> None:
             "name": "Communication ete",
             "campaign_type": "MAPSI_MARKETING",
             "theme": "Simplifier la communication produit",
-            "selected_channels": ["mapsi_site", "oling_site", "linkedin_manual"],
+            "selected_channels": ["mapsi_site", "oling_site", "linkedin_manual", "email_manual"],
         },
     )
     assert create_response.status_code == 201
@@ -28,8 +28,8 @@ def test_simple_campaign_lifecycle(client) -> None:
     assert generate_response.status_code == 200
     payload = generate_response.json()
     assert payload["status"] == "READY"
-    assert len(payload["content_assets"]) == 3
-    assert {asset["channel"] for asset in payload["content_assets"]} == {"mapsi_site", "oling_site", "linkedin_manual"}
+    assert len(payload["content_assets"]) == 4
+    assert {asset["channel"] for asset in payload["content_assets"]} == {"mapsi_site", "oling_site", "linkedin_manual", "email_manual"}
     mapsi_asset = next(asset for asset in payload["content_assets"] if asset["channel"] == "mapsi_site")
     assert len(mapsi_asset["content_text"]) > 400
     assert "<ul>" in mapsi_asset["content_html"]
@@ -43,6 +43,10 @@ def test_simple_campaign_lifecycle(client) -> None:
 
     linkedin_asset_initial = next(asset for asset in payload["content_assets"] if asset["channel"] == "linkedin_manual")
     assert "Visuel suggere :" in linkedin_asset_initial["content_text"]
+    email_asset_initial = next(asset for asset in payload["content_assets"] if asset["channel"] == "email_manual")
+    assert email_asset_initial["title"] == "Communication MAPSI : Simplifier la communication produit"
+    assert "Objet :" in email_asset_initial["content_text"]
+    assert "Bien cordialement," in email_asset_initial["content_text"]
 
     regenerate_response = client.post(
         f"/studio-simple/campaigns/{campaign_id}/generate",
@@ -51,7 +55,7 @@ def test_simple_campaign_lifecycle(client) -> None:
     assert regenerate_response.status_code == 200
     regenerated = regenerate_response.json()
     assert regenerated["status"] == "READY"
-    assert len(regenerated["content_assets"]) == 3
+    assert len(regenerated["content_assets"]) == 4
 
     linkedin_asset = next(asset for asset in regenerated["content_assets"] if asset["channel"] == "linkedin_manual")
     update_response = client.put(
@@ -71,7 +75,7 @@ def test_simple_campaign_lifecycle(client) -> None:
     publish_partial = client.post(
         f"/studio-simple/campaigns/{campaign_id}/publish",
         headers=auth_headers(roles=["ROLE_GROWTH_PUBLISH"], jti=str(uuid4())),
-        json={"channels": ["mapsi_site", "linkedin_manual"]},
+        json={"channels": ["mapsi_site", "linkedin_manual", "email_manual"]},
     )
     assert publish_partial.status_code == 200
     assert publish_partial.json()["status"] == "PARTIALLY_PUBLISHED"
@@ -83,7 +87,7 @@ def test_simple_campaign_lifecycle(client) -> None:
     )
     assert publish_final.status_code == 200
     assert publish_final.json()["status"] == "PUBLISHED"
-    assert len(publish_final.json()["publications"]) == 3
+    assert len(publish_final.json()["publications"]) == 4
 
 
 def test_simple_campaign_hides_legacy_campaigns(client, session) -> None:
@@ -127,7 +131,7 @@ def test_simple_campaign_generates_theme_when_missing(client) -> None:
         json={
             "name": "Campagne sans theme",
             "campaign_type": "MAPSI_USERS",
-            "selected_channels": ["mapsi_site", "linkedin_manual"],
+            "selected_channels": ["mapsi_site", "linkedin_manual", "email_manual"],
         },
     )
     assert create_response.status_code == 201
@@ -142,7 +146,7 @@ def test_simple_campaign_uses_distinct_tone_for_users_and_oling(client) -> None:
         json={
             "name": "Usage quotidien",
             "campaign_type": "MAPSI_USERS",
-            "selected_channels": ["mapsi_site", "linkedin_manual"],
+            "selected_channels": ["mapsi_site", "linkedin_manual", "email_manual"],
         },
     )
     assert users_campaign.status_code == 201
@@ -155,8 +159,10 @@ def test_simple_campaign_uses_distinct_tone_for_users_and_oling(client) -> None:
     users_assets = users_generated.json()["content_assets"]
     users_article = next(asset for asset in users_assets if asset["channel"] == "mapsi_site")
     users_linkedin = next(asset for asset in users_assets if asset["channel"] == "linkedin_manual")
+    users_email = next(asset for asset in users_assets if asset["channel"] == "email_manual")
     assert "Ce sujet merite une communication de fond" in users_article["content_text"]
     assert "Visuel suggere :" in users_linkedin["content_text"]
+    assert "Objet :" in users_email["content_text"]
 
     oling_campaign = client.post(
         "/studio-simple/campaigns",
@@ -164,7 +170,7 @@ def test_simple_campaign_uses_distinct_tone_for_users_and_oling(client) -> None:
         json={
             "name": "Conseil Oling",
             "campaign_type": "OLING",
-            "selected_channels": ["oling_site", "linkedin_manual"],
+            "selected_channels": ["oling_site", "linkedin_manual", "email_manual"],
         },
     )
     assert oling_campaign.status_code == 201
@@ -177,8 +183,10 @@ def test_simple_campaign_uses_distinct_tone_for_users_and_oling(client) -> None:
     oling_assets = oling_generated.json()["content_assets"]
     oling_article = next(asset for asset in oling_assets if asset["channel"] == "oling_site")
     oling_linkedin = next(asset for asset in oling_assets if asset["channel"] == "linkedin_manual")
+    oling_email = next(asset for asset in oling_assets if asset["channel"] == "email_manual")
     assert "Chez OLING, l'approche se structure autour de" in oling_article["content_text"]
     assert "Visuel suggere :" in oling_linkedin["content_text"]
+    assert "Objet :" in oling_email["content_text"]
     assert oling_article["content_text"] != users_article["content_text"]
 
 

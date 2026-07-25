@@ -686,9 +686,13 @@ def build_editorial_generation_service(session, *, force_mode: str | None = None
     effective_mode = force_mode or settings.editorial_engine_mode
     provider: EditorialGeneratorInterface
     if effective_mode in {"real", "shadow"} or settings.editorial_agent_backend == "openai":
-        from app.infrastructure.agents.openai_backend import OpenAIAgentsBackend
+        try:
+            import agents  # noqa: F401
+            from app.infrastructure.agents.openai_backend import OpenAIAgentsBackend
 
-        provider = OpenAIEditorialGenerator(OpenAIAgentsBackend())
+            provider = OpenAIEditorialGenerator(OpenAIAgentsBackend())
+        except ImportError:
+            provider = SimulatedEditorialGenerator()
     else:
         provider = SimulatedEditorialGenerator()
     return EditorialGenerationService(

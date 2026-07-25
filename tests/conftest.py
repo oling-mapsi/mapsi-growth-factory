@@ -55,7 +55,7 @@ from app.infrastructure.db import models  # noqa: F401
 from app.knowledge import KnowledgeRepository
 from app.application.services.editorial_engine_v1 import build_editorial_generation_service
 from app.application.services.github_intelligence_service import GitHubIntelligenceService
-from app.application.services.simple_campaign_service import ManualLinkedInPublisher, SimpleCampaignService
+from app.application.services.simple_campaign_service import ManualEmailPublisher, ManualLinkedInPublisher, SimpleCampaignService
 from app.entrypoints.api.dependencies import get_github_intelligence_service, get_simple_campaign_service
 from app.infrastructure.connectors.fakes import CompositeSimulatedPublisher, OlingMockPublisher, SimulatedMapsiSiteConnector
 from app.infrastructure.connectors.github import GitHubConnector
@@ -112,6 +112,7 @@ def client(session: Session) -> Generator[TestClient, None, None]:
             publisher=CompositeSimulatedPublisher(
                 {
                     "linkedin_manual": ManualLinkedInPublisher(),
+                    "email_manual": ManualEmailPublisher(),
                     "oling": OlingMockPublisher(),
                     "mapsi_site": SimulatedMapsiSiteConnector(),
                 }

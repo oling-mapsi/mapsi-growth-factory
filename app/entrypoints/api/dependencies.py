@@ -7,7 +7,7 @@ from app.application.services.editorial_engine_v1 import build_editorial_generat
 from app.application.services.github_intelligence_service import GitHubIntelligenceService
 from app.application.services.mapsi_news_publisher import MapsiNewsPublisher
 from app.application.services.oling_news_publisher import OlingNewsPublisher
-from app.application.services.simple_campaign_service import ManualLinkedInPublisher, SimpleCampaignService
+from app.application.services.simple_campaign_service import ManualEmailPublisher, ManualLinkedInPublisher, SimpleCampaignService
 from app.core.config import get_settings
 from app.core.db import get_db_session
 from app.infrastructure.connectors.fakes import CompositeSimulatedPublisher, OlingMockPublisher, SimulatedMapsiSiteConnector
@@ -72,6 +72,7 @@ def get_simple_campaign_service(session: Session = Depends(get_db_session)) -> S
     publisher = CompositeSimulatedPublisher(
         {
             "linkedin_manual": ManualLinkedInPublisher(),
+            "email_manual": ManualEmailPublisher(),
             "oling": oling_publisher,
             "mapsi_site": mapsi_publisher,
         }
