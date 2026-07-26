@@ -16,6 +16,7 @@ from app.infrastructure.connectors.mapsi_site import MapsiSiteConnector, build_m
 from app.infrastructure.connectors.oling import OlingConnector, build_oling_config
 from app.infrastructure.repositories.audit import SqlAlchemyAuditLogRepository
 from app.infrastructure.repositories.campaigns import SqlAlchemyCampaignRepository
+from app.infrastructure.repositories.editorial_source_packs import EditorialSourcePackRepository
 from app.infrastructure.repositories.mapsi_site_publications import MapsiNewsPublicationRepository
 from app.infrastructure.repositories.oling import OlingNewsPublicationRepository
 from app.infrastructure.repositories.product_intelligence import (
@@ -83,7 +84,8 @@ def get_simple_campaign_service(session: Session = Depends(get_db_session)) -> S
         audit_log=audit_log,
         task_queue=RedisTaskQueue(settings.redis_url, settings.redis_queue_name),
         project_root=Path(__file__).resolve().parents[3],
-        editorial_service=build_editorial_generation_service(session),
+        editorial_service=build_editorial_generation_service(session, force_mode="real"),
         knowledge_repository=KnowledgeRepository(session),
+        source_pack_repository=EditorialSourcePackRepository(session),
         require_real_editorial_backend=True,
     )

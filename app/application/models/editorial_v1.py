@@ -109,10 +109,16 @@ class EditorialGenerationContext(StrictModel):
     oling_practice: OlingPracticeContext | None = None
     published_topic_history: list[PublishedArticleContext] = Field(default_factory=list)
     sources: list[EditorialSourceDescriptor]
+    context_digest: StrictStr = ""
     rewrite_instruction: StrictStr = ""
     desired_title: StrictStr = ""
     length_directive: Literal["", "shorter", "longer"] = ""
     angle_directive: StrictStr = ""
+
+
+class EditorialArticleRewriteContext(StrictModel):
+    editorial_context: EditorialGenerationContext
+    draft_article: EditorialArticle
 
 
 class EditorialChannelVariantContext(StrictModel):

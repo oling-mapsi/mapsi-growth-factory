@@ -69,9 +69,13 @@ def _article_payload(*, topic: str, article_type: str, source_ids: list[str], bo
     }
 
 
+def _rewrite_pair(payload: dict) -> list[dict]:
+    return [payload, payload]
+
+
 def test_generate_mapsi_recent_novelty_persists_draft(session) -> None:
     _seed_recent_product_change(session)
-    backend = FakeStructuredAgentBackend([_article_payload(topic="Export des indicateurs du tableau utilisateur", article_type="MAPSI_PRODUCT", source_ids=["knowledge:mapsi:feature:dashboard-indicators-export", "product_change:pc-1"])], provider_type="openai")
+    backend = FakeStructuredAgentBackend(_rewrite_pair(_article_payload(topic="Export des indicateurs du tableau utilisateur", article_type="MAPSI_PRODUCT", source_ids=["knowledge:mapsi:feature:dashboard-indicators-export", "product_change:pc-1"])), provider_type="openai")
     service = build_editorial_generation_service(session, force_mode="real")
     service.generator = OpenAIEditorialGenerator(backend)
 
@@ -101,7 +105,7 @@ def test_generate_mapsi_blocks_already_treated_topic(session) -> None:
         )
     )
     session.commit()
-    backend = FakeStructuredAgentBackend([_article_payload(topic="Export des indicateurs du tableau utilisateur", article_type="MAPSI_PRODUCT", source_ids=["knowledge:mapsi:feature:dashboard-indicators-export", "product_change:pc-1"], body_text="Export des indicateurs du tableau utilisateur et usages. " * 8)], provider_type="openai")
+    backend = FakeStructuredAgentBackend(_rewrite_pair(_article_payload(topic="Export des indicateurs du tableau utilisateur", article_type="MAPSI_PRODUCT", source_ids=["knowledge:mapsi:feature:dashboard-indicators-export", "product_change:pc-1"], body_text="Export des indicateurs du tableau utilisateur et usages. " * 8)), provider_type="openai")
     service = build_editorial_generation_service(session, force_mode="shadow")
     service.generator = OpenAIEditorialGenerator(backend)
 
@@ -110,7 +114,7 @@ def test_generate_mapsi_blocks_already_treated_topic(session) -> None:
 
 
 def test_generate_oling_practice_works(session) -> None:
-    backend = FakeStructuredAgentBackend([_article_payload(topic="ERP", article_type="OLING_PRACTICE", source_ids=["knowledge:oling:practice:erp", "knowledge:oling:profile"])], provider_type="openai")
+    backend = FakeStructuredAgentBackend(_rewrite_pair(_article_payload(topic="ERP", article_type="OLING_PRACTICE", source_ids=["knowledge:oling:practice:erp", "knowledge:oling:profile"])), provider_type="openai")
     service = build_editorial_generation_service(session, force_mode="shadow")
     service.generator = OpenAIEditorialGenerator(backend)
 
@@ -136,13 +140,16 @@ def test_article_prompt_is_distinct_between_mapsi_site_and_oling_site(session) -
     assert "Canal article: oling_site" in consulting_prompt
     assert "publication Oling.fr" in consulting_prompt
     assert "article de cabinet sur une pratique OLING" in oling_prompt
+    rewrite_prompt = generator._build_rewrite_prompt(service._build_mapsi_context(article_type="MAPSI_PRODUCT", destination="mapsi"))
+    assert "EditorialArticleRewriteAgent" in rewrite_prompt
+    assert "Voix finale: editorial produit premium" in rewrite_prompt
 
 
 def test_generate_blocks_claim_without_valid_source(session) -> None:
     _seed_recent_product_change(session)
     payload = _article_payload(topic="Export des indicateurs du tableau utilisateur", article_type="MAPSI_PRODUCT", source_ids=["knowledge:mapsi:feature:dashboard-indicators-export"])
     payload["claims"][0]["source_ids"] = ["unknown-source"]
-    backend = FakeStructuredAgentBackend([payload], provider_type="openai")
+    backend = FakeStructuredAgentBackend(_rewrite_pair(payload), provider_type="openai")
     service = build_editorial_generation_service(session, force_mode="real")
     service.generator = OpenAIEditorialGenerator(backend)
 
@@ -153,7 +160,7 @@ def test_generate_blocks_claim_without_valid_source(session) -> None:
 def test_generate_blocks_invented_client_reference(session) -> None:
     _seed_recent_product_change(session)
     payload = _article_payload(topic="Export des indicateurs du tableau utilisateur", article_type="MAPSI_PRODUCT", source_ids=["knowledge:mapsi:feature:dashboard-indicators-export", "product_change:pc-1"], body_text="Chez Acme, cette fonctionnalite change tout. " * 8)
-    backend = FakeStructuredAgentBackend([payload], provider_type="openai")
+    backend = FakeStructuredAgentBackend(_rewrite_pair(payload), provider_type="openai")
     service = build_editorial_generation_service(session, force_mode="real")
     service.generator = OpenAIEditorialGenerator(backend)
 
@@ -163,7 +170,7 @@ def test_generate_blocks_invented_client_reference(session) -> None:
 
 def test_generate_blocks_unverified_claim(session) -> None:
     _seed_recent_product_change(session)
-    backend = FakeStructuredAgentBackend([_article_payload(topic="Export des indicateurs du tableau utilisateur", article_type="MAPSI_PRODUCT", source_ids=["knowledge:mapsi:feature:dashboard-indicators-export", "product_change:pc-1"], claim_verified=False)], provider_type="openai")
+    backend = FakeStructuredAgentBackend(_rewrite_pair(_article_payload(topic="Export des indicateurs du tableau utilisateur", article_type="MAPSI_PRODUCT", source_ids=["knowledge:mapsi:feature:dashboard-indicators-export", "product_change:pc-1"], claim_verified=False)), provider_type="openai")
     service = build_editorial_generation_service(session, force_mode="shadow")
     service.generator = OpenAIEditorialGenerator(backend)
 
@@ -175,7 +182,7 @@ def test_generate_blocks_source_insufficient(session) -> None:
     _seed_recent_product_change(session)
     payload = _article_payload(topic="Export des indicateurs du tableau utilisateur", article_type="MAPSI_PRODUCT", source_ids=[])
     payload["claims"] = []
-    backend = FakeStructuredAgentBackend([payload], provider_type="openai")
+    backend = FakeStructuredAgentBackend(_rewrite_pair(payload), provider_type="openai")
     service = build_editorial_generation_service(session, force_mode="real")
     service.generator = OpenAIEditorialGenerator(backend)
 
@@ -221,9 +228,28 @@ def test_similarity_checks_against_existing_article_assets(session) -> None:
         )
     )
     session.commit()
-    backend = FakeStructuredAgentBackend([_article_payload(topic="Export des indicateurs du tableau utilisateur", article_type="MAPSI_PRODUCT", source_ids=["knowledge:mapsi:feature:dashboard-indicators-export", "product_change:pc-1"], body_text="Export des indicateurs du tableau utilisateur et usages. " * 8)], provider_type="openai")
+    backend = FakeStructuredAgentBackend(_rewrite_pair(_article_payload(topic="Export des indicateurs du tableau utilisateur", article_type="MAPSI_PRODUCT", source_ids=["knowledge:mapsi:feature:dashboard-indicators-export", "product_change:pc-1"], body_text="Export des indicateurs du tableau utilisateur et usages. " * 8)), provider_type="openai")
     service = build_editorial_generation_service(session, force_mode="real")
     service.generator = OpenAIEditorialGenerator(backend)
 
     with pytest.raises(EditorialGenerationBlockedError, match="content_too_similar"):
         service.generate_mapsi(destination="mapsi", persist=False)
+
+
+def test_generate_articles_uses_two_openai_passes(session) -> None:
+    _seed_recent_product_change(session)
+    payload = _article_payload(
+        topic="Export des indicateurs du tableau utilisateur",
+        article_type="MAPSI_PRODUCT",
+        source_ids=["knowledge:mapsi:feature:dashboard-indicators-export", "product_change:pc-1"],
+    )
+    backend = FakeStructuredAgentBackend(_rewrite_pair(payload), provider_type="openai")
+    service = build_editorial_generation_service(session, force_mode="real")
+    service.generator = OpenAIEditorialGenerator(backend)
+
+    service.generate_mapsi(destination="mapsi", persist=False)
+
+    assert [call["agent_name"] for call in backend.calls] == [
+        "EditorialArticleGenerator",
+        "EditorialArticleRewriteAgent",
+    ]

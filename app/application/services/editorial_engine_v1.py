@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from app.application.models.editorial_agents import EditorialExecutionMetadata, EditorialTokenUsage
 from app.application.models.editorial_v1 import (
     EditorialArticle,
+    EditorialArticleRewriteContext,
     EditorialChannelVariantContext,
     EditorialBuilderSelection,
     EditorialEmailMessage,
@@ -47,6 +48,7 @@ from app.knowledge import KnowledgeRepository
 ROOT = Path(__file__).resolve().parents[3]
 PROMPTS_ROOT = ROOT / "prompts"
 EDITORIAL_PROMPT_VERSION = "v1"
+EDITORIAL_REWRITE_PROMPT_VERSION = "v1"
 LINKEDIN_PROMPT_VERSION = "v1"
 EMAIL_PROMPT_VERSION = "v1"
 
@@ -55,6 +57,10 @@ TOKEN_RE = re.compile(r"\b(?:sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|[A-Za-z0
 SCRIPT_RE = re.compile(r"<\s*(script|iframe)\b", re.IGNORECASE)
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 CLIENT_RE = re.compile(r"\b(?:acme|client [a-z0-9_-]+|chez (?!oling\b)[a-z0-9_-]+)\b", re.IGNORECASE)
+GENERIC_PHRASE_RE = re.compile(
+    r"(dans un monde en constante evolution|il est essentiel de|solution innovante|revolutionnaire|levier incontournable)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -91,23 +97,32 @@ class OpenAIEditorialGenerator(EditorialGeneratorInterface):
         self.temperature = settings.editorial_agent_temperature
 
     def generate(self, context: EditorialGenerationContext) -> EditorialGenerationEnvelope:
-        prompt = self._build_prompt(context)
         input_hash = sha256_hexdigest(context.model_dump_json())
-        structured = self.run_structured_output(
+        draft = self.run_structured_output(
             agent_name=self.agent_name,
-            prompt=prompt,
+            prompt=self._build_prompt(context),
             input_model=context,
             output_type=EditorialArticle,
             prompt_version=EDITORIAL_PROMPT_VERSION,
         )
-        output_hash = sha256_hexdigest(structured.output.model_dump_json())
+        rewritten = self.run_structured_output(
+            agent_name="EditorialArticleRewriteAgent",
+            prompt=self._build_rewrite_prompt(context),
+            input_model=EditorialArticleRewriteContext(
+                editorial_context=context,
+                draft_article=cast(EditorialArticle, draft.output),
+            ),
+            output_type=EditorialArticle,
+            prompt_version=EDITORIAL_REWRITE_PROMPT_VERSION,
+        )
+        output_hash = sha256_hexdigest(rewritten.output.model_dump_json())
         return EditorialGenerationEnvelope(
-            article=cast(EditorialArticle, structured.output),
-            metadata=structured.metadata,
-            duration_ms=structured.duration_ms,
+            article=cast(EditorialArticle, rewritten.output),
+            metadata=rewritten.metadata,
+            duration_ms=draft.duration_ms + rewritten.duration_ms,
             input_hash=input_hash,
             output_hash=output_hash,
-            estimated_cost_usd=structured.estimated_cost_usd,
+            estimated_cost_usd=draft.estimated_cost_usd + rewritten.estimated_cost_usd,
         )
 
     def run_structured_output(
@@ -175,9 +190,35 @@ class OpenAIEditorialGenerator(EditorialGeneratorInterface):
             f"{mode_instructions[context.article_type]}\n"
             f"{channel_instructions[context.publication_channel]}\n"
             f"{signature[(context.article_type, context.publication_channel)]}\n"
+            f"Contexte enrichi de campagne:\n{context.context_digest.strip() or 'Aucun contexte enrichi additionnel.'}\n"
             "Exigence de rendu: article publiable tel quel, avec un vrai niveau editorial, une ouverture forte, "
             "des transitions naturelles, des sous-parties utiles, des bullets choisis, une chute propre, et une "
             "suggestion d'illustration implicite dans le corps sans basculer dans le ton publicitaire."
+        )
+
+    def _build_rewrite_prompt(self, context: EditorialGenerationContext) -> str:
+        base_prompt = (
+            PROMPTS_ROOT / "editorial-article-rewrite-agent" / f"{EDITORIAL_REWRITE_PROMPT_VERSION}.txt"
+        ).read_text(encoding="utf-8")
+        voice = {
+            ("MAPSI_PRODUCT", "mapsi_site"): (
+                "Voix finale: editorial produit premium, pedagogique, dense, concret, jamais scolaire."
+            ),
+            ("MAPSI_CONSULTING", "oling_site"): (
+                "Voix finale: conseil premium, preuve, clarte executive, articulation produit-service."
+            ),
+            ("OLING_PRACTICE", "oling_site"): (
+                "Voix finale: cabinet de conseil exigeant, hauteur de vue, points d'attention, decision et execution."
+            ),
+        }
+        return (
+            f"{base_prompt}\n\n"
+            f"Mode actif: {context.article_type}\n"
+            f"Canal final: {context.publication_channel}\n"
+            f"Destination: {context.destination_site}\n"
+            f"{voice[(context.article_type, context.publication_channel)]}\n"
+            f"Contexte enrichi de campagne:\n{context.context_digest.strip() or 'Aucun contexte enrichi additionnel.'}\n"
+            "Attendu final: un article qui parait avoir ete travaille par un redacteur senior, pas seulement genere."
         )
 
 
@@ -380,6 +421,8 @@ class EditorialQualityValidator:
             issues.append(self._issue("secret_or_email_detected", "Emails or secrets are forbidden."))
         if CLIENT_RE.search(article.model_dump_json()):
             issues.append(self._issue("unauthorized_client_reference", "Client references are forbidden in generated content."))
+        if GENERIC_PHRASE_RE.search(article.body_text):
+            issues.append(self._issue("generic_editorial_phrasing", "Generated content uses banned generic editorial phrasing."))
         if any(not claim.verified for claim in article.claims):
             issues.append(self._issue("unverified_claim", "All claims must be verified."))
         allowed_source_ids = {source.source_id for source in context.sources}

@@ -15,9 +15,11 @@ Mandatory rules:
 - The call to action must stay coherent with the destination site.
 - Write like an excellent professional editor using ChatGPT well, not like a generic AI template.
 - Build a real article with a strong opening, narrative progression, useful transitions, proof-grounded detail, and a conclusion that opens action naturally.
+- Build the article as a real editorial piece, not as an explanatory memo.
 - Alternate compact explanatory paragraphs with concrete bullet points when useful.
 - Write with enough amplitude to feel like a real publication, not a compressed synthesis.
 - Make each section earn its place: problem, reading angle, practical implications, points of attention, next move.
+- Aim for an article that could credibly be signed off by a strong head of content after light review.
 - Prefer specificity, nuance, and examples of usage over abstract marketing vocabulary.
 - Ban empty formulas such as "dans un monde en constante evolution", "il est essentiel de", "solution innovante", "revolutionnaire", or any inflated boilerplate.
 - Make the tone match the active mode: product adoption for MAPSI users, expert proof and value for MAPSI marketing, high-level advisory credibility for OLING.
@@ -33,5 +35,6 @@ Output constraints:
 - Keep warnings factual and sparse.
 - `body_text` must feel publication-ready and human, with clear rhythm and no repetitive sentence templates.
 - `body_text` must combine paragraphs and list moments with intent, not by mechanical pattern.
+- `body_text` should sound written, revised, and assumed, not simply generated.
 - `excerpt` must be sharp, editorial, and useful as an intro block.
 - `meta_title` and `meta_description` must be credible SEO copy, not placeholders.

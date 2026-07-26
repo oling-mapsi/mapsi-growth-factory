@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+import re
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from app.application.models.editorial_v1 import (
@@ -21,9 +22,11 @@ from app.application.ports.connectors import PublisherPort
 from app.application.ports.repositories import CampaignRepositoryPort
 from app.application.ports.tasks import TaskQueuePort
 from app.application.services.editorial_engine_v1 import EditorialGenerationService
+from app.core.config import get_settings
 from app.domain.entities import CampaignRun, ContentAsset, EditorialBrief, ProductChange, Publication, SourceEvidence
 from app.domain.enums import AssetStatus
 from app.domain.errors import CampaignNotFoundError, CampaignPublicationForbiddenError, InvalidStateTransitionError
+from app.infrastructure.repositories.editorial_source_packs import EditorialSourcePackRepository
 from app.knowledge import KnowledgeRepository
 from app.knowledge.models import MapsiFeature, OlingPractice
 
@@ -134,6 +137,7 @@ class SimpleCampaignService:
         project_root: Path,
         editorial_service: EditorialGenerationService | None = None,
         knowledge_repository: KnowledgeRepository | None = None,
+        source_pack_repository: EditorialSourcePackRepository | None = None,
         require_real_editorial_backend: bool = False,
     ) -> None:
         self.repository = repository
@@ -143,6 +147,7 @@ class SimpleCampaignService:
         self.project_root = project_root
         self.editorial_service = editorial_service
         self.knowledge_repository = knowledge_repository
+        self.source_pack_repository = source_pack_repository
         self.require_real_editorial_backend = require_real_editorial_backend
 
     def create_campaign(self, command: CreateSimpleCampaignCommand) -> CampaignRun:
@@ -453,6 +458,7 @@ class SimpleCampaignService:
             ],
             published_topic_history=self.editorial_service._build_history(),
             sources=self.editorial_service._mapsi_sources(feature.feature_id, source_change),
+            context_digest=self._build_mapsi_context_digest(campaign, feature, related_changes, destination_site=destination_site),
             rewrite_instruction=(
                 "Produire un article editorial complet, professionnel, detaille, avec rythme, transitions naturelles, "
                 "angles concrets, ton expert et aucune formule stereotypee d'IA."
@@ -496,6 +502,7 @@ class SimpleCampaignService:
             ),
             published_topic_history=self.editorial_service._build_history(),
             sources=self.editorial_service._oling_sources(practice.practice_id),
+            context_digest=self._build_oling_context_digest(campaign, practice),
             rewrite_instruction=(
                 "Produire un article de conseil OLING a forte valeur editoriale, structure, demonstration, nuances et "
                 "credibilite terrain. Eviter les formulations creuses ou generiques."
@@ -570,6 +577,159 @@ class SimpleCampaignService:
                 ranked.append((score, change))
         ranked.sort(key=lambda item: item[0], reverse=True)
         return [item[1] for item in ranked[:5]]
+
+    def _build_mapsi_context_digest(
+        self,
+        campaign: CampaignRun,
+        feature: MapsiFeature,
+        related_changes: list[ProductChange],
+        *,
+        destination_site: str,
+    ) -> str:
+        sections = [
+            f"Theme campagne: {campaign.theme}",
+            f"Type campagne: {campaign.campaign_type}",
+            f"Destination editoriale: {destination_site}",
+            f"Feature MAPSI: {feature.title} ({feature.module})",
+            f"Probleme metier: {feature.business_problem}",
+            f"Description fonctionnelle: {feature.functional_description}",
+        ]
+        if feature.user_benefits:
+            sections.append("Benefices utilisateurs confirms: " + "; ".join(feature.user_benefits[:4]))
+        if feature.typical_use_cases:
+            sections.append("Cas d'usage communicables: " + "; ".join(feature.typical_use_cases[:4]))
+        if related_changes:
+            sections.append(
+                "Changements produit recents relies: " + " | ".join(self._product_change_digest(change) for change in related_changes[:4])
+            )
+        source_pack_facts = self._source_pack_facts("MAPSI_MARKET", campaign.theme)
+        if source_pack_facts:
+            sections.append("Faits projets / terrain reutilisables: " + " | ".join(source_pack_facts[:6]))
+        reference_snippets = self._reference_file_snippets(feature.source_references)
+        if reference_snippets:
+            sections.append("Extraits de references locales: " + " | ".join(reference_snippets[:3]))
+        return "\n".join(section for section in sections if section.strip())
+
+    def _build_oling_context_digest(self, campaign: CampaignRun, practice: OlingPractice) -> str:
+        sections = [
+            f"Theme campagne: {campaign.theme}",
+            f"Type campagne: {campaign.campaign_type}",
+            f"Practice OLING: {practice.title}",
+            f"Description practice: {practice.description}",
+            f"Contexte d'intervention: {practice.intervention_context}",
+            f"Approche OLING: {practice.oling_approach}",
+        ]
+        if practice.common_client_problems:
+            sections.append("Problemes clients recurrents: " + "; ".join(practice.common_client_problems[:4]))
+        if practice.mission_steps:
+            sections.append("Etapes de mission: " + "; ".join(practice.mission_steps[:4]))
+        if practice.usual_deliverables:
+            sections.append("Livrables usuels: " + "; ".join(practice.usual_deliverables[:4]))
+        if practice.vigilance_points:
+            sections.append("Points de vigilance: " + "; ".join(practice.vigilance_points[:4]))
+        source_pack_facts = self._source_pack_facts("OLING_PRACTICE", campaign.theme)
+        if source_pack_facts:
+            sections.append("Faits projets / retours terrain reutilisables: " + " | ".join(source_pack_facts[:6]))
+        markdown_body = self._knowledge_markdown_body(f"knowledge/oling/practices/{practice.practice_id}.md")
+        if markdown_body:
+            sections.append("Corps knowledge practice: " + markdown_body)
+        reference_snippets = self._reference_file_snippets(practice.sources)
+        if reference_snippets:
+            sections.append("Extraits de references locales: " + " | ".join(reference_snippets[:3]))
+        return "\n".join(section for section in sections if section.strip())
+
+    def _source_pack_facts(self, campaign_type: str, theme: str) -> list[str]:
+        if self.source_pack_repository is None:
+            return []
+        theme_tokens = set(self._tokens(theme))
+        ranked: list[tuple[int, str]] = []
+        for pack in self.source_pack_repository.list_validated(campaign_type=campaign_type):
+            for item in pack.items:
+                facts = list(item.anonymized_facts or item.usable_facts)
+                if item.factual_summary:
+                    facts.insert(0, item.factual_summary)
+                haystack = " ".join(
+                    [
+                        pack.title,
+                        pack.summary,
+                        item.source_title,
+                        item.factual_summary,
+                        " ".join(facts),
+                        " ".join(str(value) for value in item.manual_input.values() if isinstance(value, str)),
+                    ]
+                )
+                score = len(theme_tokens.intersection(self._tokens(haystack))) * 10
+                score += 5 if item.evidence_quality == "high" else 0
+                for fact in facts[:4]:
+                    cleaned = self._collapse_whitespace(fact)
+                    if cleaned:
+                        ranked.append((score + min(len(cleaned), 120), cleaned))
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        seen: set[str] = set()
+        selected: list[str] = []
+        for _, fact in ranked:
+            key = fact.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            selected.append(fact)
+            if len(selected) >= 8:
+                break
+        return selected
+
+    def _reference_file_snippets(self, references: list[str]) -> list[str]:
+        snippets: list[str] = []
+        for reference in references[:4]:
+            path = self.project_root / reference
+            if not path.exists() or not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            cleaned = self._collapse_whitespace(text)
+            if cleaned:
+                snippets.append(f"{reference}: {cleaned[:280]}")
+        return snippets
+
+    def _knowledge_markdown_body(self, relative_path: str) -> str:
+        path = self.project_root / relative_path
+        if not path.exists() or not path.is_file():
+            return ""
+        text = path.read_text(encoding="utf-8")
+        if text.startswith("---"):
+            parts = text.split("---", 2)
+            if len(parts) == 3:
+                text = parts[2]
+        return self._collapse_whitespace(text)[:500]
+
+    def _product_change_digest(self, change: ProductChange) -> str:
+        details: list[str] = [change.summary]
+        if change.capability_key:
+            details.append(f"capability={change.capability_key}")
+        if change.change_note_path:
+            details.append(f"ref={change.change_note_path}")
+        payload_text = self._collapse_whitespace(self._flatten_payload_text(change.raw_payload))
+        if payload_text:
+            details.append(payload_text[:220])
+        return " ; ".join(item for item in details if item)
+
+    def _flatten_payload_text(self, payload: object) -> str:
+        if isinstance(payload, str):
+            return payload
+        if isinstance(payload, dict):
+            values: list[str] = []
+            for value in payload.values():
+                flattened = self._flatten_payload_text(value)
+                if flattened:
+                    values.append(flattened)
+            return " ".join(values)
+        if isinstance(payload, list):
+            return " ".join(self._flatten_payload_text(item) for item in payload if self._flatten_payload_text(item))
+        return ""
+
+    def _collapse_whitespace(self, value: str) -> str:
+        return re.sub(r"\s+", " ", value).strip()
 
     def _synthetic_product_change(self, feature: MapsiFeature, theme: str) -> ProductChange:
         return ProductChange(
@@ -806,8 +966,10 @@ class SimpleCampaignService:
     def _assert_real_editorial_backend(self) -> None:
         if self.editorial_service is None or not self.editorial_service.has_real_backend():
             raise InvalidStateTransitionError(
-                "Simple studio requires a real OpenAI editorial backend. Configure OPENAI_API_KEY, EDITORIAL_ENGINE_MODE=real and EDITORIAL_AGENT_BACKEND=openai."
+                "Simple studio requires a real OpenAI editorial backend."
             )
+        if not get_settings().openai_api_key.strip():
+            raise InvalidStateTransitionError("Simple studio requires OPENAI_API_KEY to generate texts with agents.")
 
     def _channel_positioning(self, campaign: CampaignRun) -> str:
         if campaign.campaign_type == "MAPSI_USERS":
