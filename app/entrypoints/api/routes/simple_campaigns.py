@@ -3,16 +3,19 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.application.services.simple_campaign_service import (
+    ApproveSimpleAssetCommand,
     CreateSimpleCampaignCommand,
     PublishSimpleCampaignCommand,
+    ReviewSimpleAssetCommand,
     SimpleCampaignService,
     UpdateSimpleAssetCommand,
 )
-from app.core.security import GROWTH_PUBLISH, GROWTH_REVIEW, GROWTH_VIEW, require_studio_admin_permission
+from app.core.security import GROWTH_APPROVE, GROWTH_PUBLISH, GROWTH_REVIEW, GROWTH_VIEW, StudioAdminPrincipal, require_studio_admin_permission
 from app.domain.errors import CampaignNotFoundError, CampaignPublicationForbiddenError, DomainError, InvalidStateTransitionError, OptimisticLockError
 from app.entrypoints.api.dependencies import get_simple_campaign_service
 from app.entrypoints.api.simple_campaign_schemas import (
     OlingThemeCatalogResponse,
+    SimpleAssetDecisionRequest,
     SimpleAssetResponse,
     SimpleAssetUpdateRequest,
     SimpleCampaignCreateRequest,
@@ -55,6 +58,9 @@ def _response(service: SimpleCampaignService, campaign) -> SimpleCampaignRespons
                 illustration_suggestion=str((item.results or {}).get("illustration_suggestion", "")),
                 status=service.simple_asset_status(item),
                 version=item.content_version,
+                approved_by=item.approved_by,
+                approved_at=item.approved_at,
+                approved_version=item.content_version if item.approved_content_hash and item.approved_content_hash == item.content_hash else None,
                 public_url=item.external_publication_url,
                 published_at=item.published_at,
             )
@@ -110,19 +116,24 @@ def get_campaign(campaign_id: str, service: SimpleCampaignService = Depends(get_
         raise _to_http_error(exc) from exc
 
 
-@router.post("/campaigns/{campaign_id}/generate", response_model=SimpleCampaignResponse, dependencies=[Depends(require_studio_admin_permission(GROWTH_REVIEW))])
-def generate_campaign(campaign_id: str, service: SimpleCampaignService = Depends(get_simple_campaign_service)) -> SimpleCampaignResponse:
+@router.post("/campaigns/{campaign_id}/generate", response_model=SimpleCampaignResponse)
+def generate_campaign(
+    campaign_id: str,
+    principal: StudioAdminPrincipal = Depends(require_studio_admin_permission(GROWTH_REVIEW)),
+    service: SimpleCampaignService = Depends(get_simple_campaign_service),
+) -> SimpleCampaignResponse:
     try:
         return _response(service, service.generate_campaign(campaign_id))
     except DomainError as exc:
         raise _to_http_error(exc) from exc
 
 
-@router.put("/campaigns/{campaign_id}/assets/{asset_id}", response_model=SimpleCampaignResponse, dependencies=[Depends(require_studio_admin_permission(GROWTH_REVIEW))])
+@router.put("/campaigns/{campaign_id}/assets/{asset_id}", response_model=SimpleCampaignResponse)
 def update_asset(
     campaign_id: str,
     asset_id: str,
     payload: SimpleAssetUpdateRequest,
+    principal: StudioAdminPrincipal = Depends(require_studio_admin_permission(GROWTH_REVIEW)),
     service: SimpleCampaignService = Depends(get_simple_campaign_service),
 ) -> SimpleCampaignResponse:
     try:
@@ -143,13 +154,93 @@ def update_asset(
         raise _to_http_error(exc) from exc
 
 
-@router.post("/campaigns/{campaign_id}/publish", response_model=SimpleCampaignResponse, dependencies=[Depends(require_studio_admin_permission(GROWTH_PUBLISH))])
+@router.post("/campaigns/{campaign_id}/assets/{asset_id}/review", response_model=SimpleCampaignResponse)
+def review_asset(
+    campaign_id: str,
+    asset_id: str,
+    payload: SimpleAssetDecisionRequest,
+    principal: StudioAdminPrincipal = Depends(require_studio_admin_permission(GROWTH_REVIEW)),
+    service: SimpleCampaignService = Depends(get_simple_campaign_service),
+) -> SimpleCampaignResponse:
+    try:
+        return _response(
+            service,
+            service.review_asset(
+                campaign_id,
+                asset_id,
+                ReviewSimpleAssetCommand(comment=payload.comment, expected_version=payload.expected_version, actor=principal.actor_id),
+            ),
+        )
+    except DomainError as exc:
+        raise _to_http_error(exc) from exc
+
+
+@router.post("/campaigns/{campaign_id}/assets/{asset_id}/approve", response_model=SimpleCampaignResponse)
+def approve_asset(
+    campaign_id: str,
+    asset_id: str,
+    payload: SimpleAssetDecisionRequest,
+    principal: StudioAdminPrincipal = Depends(require_studio_admin_permission(GROWTH_APPROVE)),
+    service: SimpleCampaignService = Depends(get_simple_campaign_service),
+) -> SimpleCampaignResponse:
+    try:
+        return _response(
+            service,
+            service.approve_asset(
+                campaign_id,
+                asset_id,
+                ApproveSimpleAssetCommand(comment=payload.comment, expected_version=payload.expected_version, actor=principal.actor_id),
+            ),
+        )
+    except DomainError as exc:
+        raise _to_http_error(exc) from exc
+
+
+@router.post("/campaigns/{campaign_id}/publish", response_model=SimpleCampaignResponse)
 def publish_campaign(
     campaign_id: str,
     payload: SimpleCampaignPublishRequest,
+    principal: StudioAdminPrincipal = Depends(require_studio_admin_permission(GROWTH_PUBLISH)),
     service: SimpleCampaignService = Depends(get_simple_campaign_service),
 ) -> SimpleCampaignResponse:
     try:
         return _response(service, service.publish_campaign(campaign_id, PublishSimpleCampaignCommand(channels=payload.channels)))
+    except DomainError as exc:
+        raise _to_http_error(exc) from exc
+
+
+@router.post("/campaigns/{campaign_id}/unpublish", response_model=SimpleCampaignResponse)
+def unpublish_campaign(
+    campaign_id: str,
+    payload: SimpleCampaignPublishRequest,
+    principal: StudioAdminPrincipal = Depends(require_studio_admin_permission(GROWTH_PUBLISH)),
+    service: SimpleCampaignService = Depends(get_simple_campaign_service),
+) -> SimpleCampaignResponse:
+    try:
+        return _response(service, service.unpublish_campaign(campaign_id, PublishSimpleCampaignCommand(channels=payload.channels), actor=principal.actor_id))
+    except DomainError as exc:
+        raise _to_http_error(exc) from exc
+
+
+@router.post("/campaigns/{campaign_id}/archive", response_model=SimpleCampaignResponse)
+def archive_campaign(
+    campaign_id: str,
+    principal: StudioAdminPrincipal = Depends(require_studio_admin_permission(GROWTH_PUBLISH)),
+    service: SimpleCampaignService = Depends(get_simple_campaign_service),
+) -> SimpleCampaignResponse:
+    try:
+        return _response(service, service.archive_campaign(campaign_id, actor=principal.actor_id))
+    except DomainError as exc:
+        raise _to_http_error(exc) from exc
+
+
+@router.delete("/campaigns/{campaign_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_campaign(
+    campaign_id: str,
+    principal: StudioAdminPrincipal = Depends(require_studio_admin_permission(GROWTH_PUBLISH)),
+    service: SimpleCampaignService = Depends(get_simple_campaign_service),
+) -> None:
+    try:
+        service.delete_campaign(campaign_id)
     except DomainError as exc:
         raise _to_http_error(exc) from exc

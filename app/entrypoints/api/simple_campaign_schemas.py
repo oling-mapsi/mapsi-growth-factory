@@ -23,6 +23,11 @@ class SimpleAssetUpdateRequest(BaseModel):
     expected_version: int | None = None
 
 
+class SimpleAssetDecisionRequest(BaseModel):
+    comment: str = ""
+    expected_version: int | None = None
+
+
 class SimplePublicationResponse(BaseModel):
     id: str
     channel: str
@@ -43,6 +48,9 @@ class SimpleAssetResponse(BaseModel):
     illustration_suggestion: str
     status: str
     version: int
+    approved_by: str
+    approved_at: datetime | None
+    approved_version: int | None
     public_url: str
     published_at: datetime | None
 

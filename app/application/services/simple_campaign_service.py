@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from html.parser import HTMLParser
 from pathlib import Path
 import re
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -24,7 +25,7 @@ from app.application.ports.tasks import TaskQueuePort
 from app.application.services.editorial_engine_v1 import EditorialGenerationService
 from app.core.config import get_settings
 from app.domain.entities import CampaignRun, ContentAsset, EditorialBrief, ProductChange, Publication, SourceEvidence
-from app.domain.enums import AssetStatus
+from app.domain.enums import AssetStatus, CampaignStatus
 from app.domain.errors import CampaignNotFoundError, CampaignPublicationForbiddenError, InvalidStateTransitionError
 from app.infrastructure.repositories.editorial_source_packs import EditorialSourcePackRepository
 from app.knowledge import KnowledgeRepository
@@ -60,6 +61,20 @@ class UpdateSimpleAssetCommand:
     title: str | None = None
     content_html: str | None = None
     content_text: str | None = None
+    expected_version: int | None = None
+
+
+@dataclass
+class ReviewSimpleAssetCommand:
+    comment: str = ""
+    actor: str = "studio-simple"
+    expected_version: int | None = None
+
+
+@dataclass
+class ApproveSimpleAssetCommand:
+    comment: str = ""
+    actor: str = "studio-simple"
     expected_version: int | None = None
 
 
@@ -126,6 +141,64 @@ class ManualEmailPublisher(PublisherPort):
         return {"campaign_id": campaign.id, "asset_id": asset.id, "status": "manual"}
 
 
+class SimpleHtmlSanitizer(HTMLParser):
+    ALLOWED_TAGS = {"p", "br", "strong", "em", "b", "i", "u", "ul", "ol", "li", "a", "h1", "h2", "h3", "blockquote"}
+    ALLOWED_ATTRS = {"a": {"href", "title", "target", "rel"}}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.blocked_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        if tag in {"script", "style", "iframe", "object", "embed"}:
+            self.blocked_depth += 1
+            return
+        if self.blocked_depth or tag not in self.ALLOWED_TAGS:
+            return
+        safe_attrs: list[str] = []
+        for name, value in attrs:
+            name = name.lower()
+            value = value or ""
+            if name.startswith("on") or name not in self.ALLOWED_ATTRS.get(tag, set()):
+                continue
+            if name == "href" and value.strip().lower().startswith(("javascript:", "data:")):
+                continue
+            if tag == "a" and name == "target" and value != "_blank":
+                continue
+            safe_attrs.append(f'{name}="{self._escape(value)}"')
+        if tag == "a" and any(item.startswith('target="_blank"') for item in safe_attrs) and not any(item.startswith("rel=") for item in safe_attrs):
+            safe_attrs.append('rel="noopener noreferrer"')
+        suffix = (" " + " ".join(safe_attrs)) if safe_attrs else ""
+        self.parts.append(f"<{tag}{suffix}>")
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag in {"script", "style", "iframe", "object", "embed"} and self.blocked_depth:
+            self.blocked_depth -= 1
+            return
+        if not self.blocked_depth and tag in self.ALLOWED_TAGS:
+            self.parts.append(f"</{tag}>")
+
+    def handle_data(self, data: str) -> None:
+        if not self.blocked_depth:
+            self.parts.append(self._escape(data))
+
+    @staticmethod
+    def _escape(value: str) -> str:
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+    @classmethod
+    def sanitize(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parser = cls()
+        parser.feed(value)
+        parser.close()
+        return "".join(parser.parts)
+
+
 class SimpleCampaignService:
     def __init__(
         self,
@@ -176,13 +249,19 @@ class SimpleCampaignService:
         return saved
 
     def list_campaigns(self) -> list[CampaignRun]:
-        return [campaign for campaign in self.repository.list() if campaign.workflow_kind == SIMPLE_WORKFLOW_KIND]
+        return [
+            campaign
+            for campaign in self.repository.list()
+            if campaign.workflow_kind == SIMPLE_WORKFLOW_KIND and campaign.status not in {CampaignStatus.ARCHIVED, CampaignStatus.DELETED}
+        ]
 
     def get_campaign(self, campaign_id: str) -> CampaignRun:
         campaign = self.repository.get(campaign_id)
         if campaign is None:
             raise CampaignNotFoundError(f"Campaign {campaign_id} not found.")
         self._assert_simple_campaign(campaign)
+        if campaign.status is CampaignStatus.DELETED:
+            raise CampaignNotFoundError(f"Campaign {campaign_id} not found.")
         return campaign
 
     def generate_campaign(self, campaign_id: str) -> CampaignRun:
@@ -191,8 +270,6 @@ class SimpleCampaignService:
         brief, assets, evidence = self._build_generation_payload(campaign)
         campaign.source_evidences = evidence
         campaign.mark_generated(brief, assets)
-        for asset in campaign.content_assets:
-            asset.approve("studio-simple")
         campaign._sync_status_from_assets()
         saved = self.repository.save(campaign)
         self.audit_log.append(
@@ -269,10 +346,9 @@ class SimpleCampaignService:
             asset.assert_expected_version(command.expected_version)
         asset.update_draft(
             title=command.title,
-            content_html=command.content_html,
+            content_html=SimpleHtmlSanitizer.sanitize(command.content_html),
             content_text=command.content_text,
         )
-        asset.approve("studio-simple")
         campaign._sync_status_from_assets()
         saved = self.repository.save(campaign)
         self.audit_log.append(
@@ -280,6 +356,50 @@ class SimpleCampaignService:
             "simple_campaign.asset_updated",
             {"asset_id": asset_id, "channel": asset.channel, "version": asset.content_version},
             actor_source="studio-simple",
+            previous_state={},
+            new_state={"status": saved.status.value},
+            result="SUCCESS",
+        )
+        return saved
+
+    def review_asset(self, campaign_id: str, asset_id: str, command: ReviewSimpleAssetCommand) -> CampaignRun:
+        campaign = self.get_campaign(campaign_id)
+        self._assert_simple_campaign(campaign)
+        asset = self._find_asset(campaign, asset_id)
+        if command.expected_version is not None:
+            asset.assert_expected_version(command.expected_version)
+        if asset.status not in {AssetStatus.READY_FOR_REVIEW, AssetStatus.CHANGES_REQUESTED, AssetStatus.DRAFT, AssetStatus.REVIEWED}:
+            raise InvalidStateTransitionError(f"Asset {asset.id} cannot be reviewed from {asset.status.value}.")
+        asset.ensure_content_hash()
+        asset.status = AssetStatus.REVIEWED
+        campaign._sync_status_from_assets()
+        saved = self.repository.save(campaign)
+        self.audit_log.append(
+            saved.id,
+            "simple_campaign.asset_reviewed",
+            {"asset_id": asset_id, "channel": asset.channel, "version": asset.content_version, "comment": command.comment},
+            actor_source=command.actor,
+            previous_state={},
+            new_state={"status": saved.status.value},
+            result="SUCCESS",
+        )
+        return saved
+
+    def approve_asset(self, campaign_id: str, asset_id: str, command: ApproveSimpleAssetCommand) -> CampaignRun:
+        campaign = self.get_campaign(campaign_id)
+        self._assert_simple_campaign(campaign)
+        asset = self._find_asset(campaign, asset_id)
+        if command.expected_version is not None:
+            asset.assert_expected_version(command.expected_version)
+        if asset.status not in {AssetStatus.REVIEWED, AssetStatus.READY_FOR_REVIEW, AssetStatus.APPROVED}:
+            raise InvalidStateTransitionError(f"Asset {asset.id} must be reviewed before approval.")
+        campaign.approve_asset(asset_id, command.comment, command.actor)
+        saved = self.repository.save(campaign)
+        self.audit_log.append(
+            saved.id,
+            "simple_campaign.asset_approved",
+            {"asset_id": asset_id, "channel": asset.channel, "version": asset.content_version, "approved_by": command.actor},
+            actor_source=command.actor,
             previous_state={},
             new_state={"status": saved.status.value},
             result="SUCCESS",
@@ -295,13 +415,20 @@ class SimpleCampaignService:
             assets = [
                 asset
                 for asset in campaign.content_assets
-                if asset.channel == internal_channel and asset.status in {AssetStatus.APPROVED, AssetStatus.FAILED}
+                if asset.channel == internal_channel and asset.status in {AssetStatus.APPROVED, AssetStatus.PUBLISHED}
             ]
             if not assets:
                 raise CampaignPublicationForbiddenError(
-                    f"Campaign {campaign.id} has no READY asset for channel {channel}."
+                    f"Campaign {campaign.id} has no approved asset for channel {channel}."
                 )
             for asset in assets:
+                asset.ensure_content_hash()
+                if not asset.approved_content_hash or asset.approved_content_hash != asset.content_hash:
+                    raise CampaignPublicationForbiddenError(
+                        f"Asset {asset.id} version {asset.content_version} is not approved for publication."
+                    )
+                if asset.status is AssetStatus.PUBLISHED:
+                    continue
                 publication = self.publisher.publish(campaign, asset)
                 campaign.publish(publication)
         saved = self.repository.save(campaign)
@@ -316,6 +443,72 @@ class SimpleCampaignService:
         )
         return saved
 
+    def delete_campaign(self, campaign_id: str) -> None:
+        campaign = self.get_campaign(campaign_id)
+        self._assert_simple_campaign(campaign)
+        if campaign.publications or any(asset.status is AssetStatus.PUBLISHED for asset in campaign.content_assets):
+            raise CampaignPublicationForbiddenError("Only campaigns that were never published can be deleted.")
+        previous_status = campaign.status.value
+        campaign.status = CampaignStatus.DELETED
+        saved = self.repository.save(campaign)
+        self.audit_log.append(
+            saved.id,
+            "simple_campaign.deleted",
+            {},
+            actor_source="studio-simple",
+            previous_state={"status": previous_status},
+            new_state={"status": saved.status.value},
+            result="SUCCESS",
+        )
+
+    def archive_campaign(self, campaign_id: str, *, actor: str = "studio-simple") -> CampaignRun:
+        campaign = self.get_campaign(campaign_id)
+        self._assert_simple_campaign(campaign)
+        previous_status = campaign.status.value
+        campaign.status = CampaignStatus.ARCHIVED
+        saved = self.repository.save(campaign)
+        self.audit_log.append(
+            saved.id,
+            "simple_campaign.archived",
+            {},
+            actor_source=actor,
+            previous_state={"status": previous_status},
+            new_state={"status": saved.status.value},
+            result="SUCCESS",
+        )
+        return saved
+
+    def unpublish_campaign(self, campaign_id: str, command: PublishSimpleCampaignCommand, *, actor: str = "studio-simple") -> CampaignRun:
+        campaign = self.get_campaign(campaign_id)
+        self._assert_simple_campaign(campaign)
+        channels = self._normalize_selected_channels(campaign.campaign_type, command.channels)
+        unpublished_channels: list[str] = []
+        for channel in channels:
+            internal_channel = CHANNEL_TO_INTERNAL[channel]
+            for asset in campaign.content_assets:
+                if asset.channel != internal_channel or asset.status is not AssetStatus.PUBLISHED:
+                    continue
+                self.publisher.unpublish(campaign, asset)
+                asset.status = AssetStatus.APPROVED
+                asset.published_at = None
+                unpublished_channels.append(channel)
+        if not unpublished_channels:
+            raise CampaignPublicationForbiddenError("No published asset found for requested channels.")
+        campaign._sync_status_from_assets()
+        saved = self.repository.save(campaign)
+        for asset in campaign.content_assets:
+            asset.ensure_content_hash()
+        self.audit_log.append(
+            saved.id,
+            "simple_campaign.unpublished",
+            {"channels": sorted(set(unpublished_channels))},
+            actor_source=actor,
+            previous_state={},
+            new_state={"status": saved.status.value},
+            result="SUCCESS",
+        )
+        return saved
+
     def list_oling_themes(self) -> list[str]:
         practices_dir = self.project_root / "knowledge" / "oling" / "practices"
         return sorted(path.stem for path in practices_dir.glob("*.md"))
@@ -324,21 +517,31 @@ class SimpleCampaignService:
         return CHANNEL_FROM_INTERNAL.get(channel, channel)
 
     def simple_status(self, campaign: CampaignRun) -> str:
+        if campaign.status is CampaignStatus.ARCHIVED:
+            return "ARCHIVED"
         if campaign.status.value == "DRAFT":
             return "DRAFT"
         if campaign.status.value in {"PUBLISHED", "PARTIALLY_PUBLISHED"}:
             return campaign.status.value
+        if campaign.status.value in {"APPROVED", "PARTIALLY_APPROVED", "READY_FOR_REVIEW", "CHANGES_REQUESTED", "GENERATED"}:
+            return campaign.status.value
         if campaign.status.value == "FAILED":
             return "ERROR"
-        return "READY"
+        return campaign.status.value
 
     def simple_asset_status(self, asset: ContentAsset) -> str:
         if asset.status is AssetStatus.PUBLISHED:
             return "PUBLISHED"
+        if asset.status is AssetStatus.APPROVED:
+            return "APPROVED"
+        if asset.status is AssetStatus.REVIEWED:
+            return "REVIEWED"
         if asset.status is AssetStatus.FAILED:
             return "ERROR"
         if asset.status is AssetStatus.DRAFT:
             return "DRAFT"
+        if asset.status is AssetStatus.READY_FOR_REVIEW:
+            return "GENERATED"
         return "READY"
 
     def _assert_simple_campaign(self, campaign: CampaignRun) -> None:

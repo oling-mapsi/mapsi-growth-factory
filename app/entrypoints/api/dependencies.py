@@ -78,14 +78,17 @@ def get_simple_campaign_service(session: Session = Depends(get_db_session)) -> S
             "mapsi_site": mapsi_publisher,
         }
     )
+    generator_mode = settings.growth_generator_mode.strip().lower()
+    if generator_mode not in {"simulated", "openai"}:
+        raise RuntimeError("GROWTH_GENERATOR_MODE must be simulated or openai.")
     return SimpleCampaignService(
         repository=repository,
         publisher=publisher,
         audit_log=audit_log,
         task_queue=RedisTaskQueue(settings.redis_url, settings.redis_queue_name),
         project_root=Path(__file__).resolve().parents[3],
-        editorial_service=build_editorial_generation_service(session, force_mode="real"),
+        editorial_service=build_editorial_generation_service(session, force_mode="real" if generator_mode == "openai" else "simulated"),
         knowledge_repository=KnowledgeRepository(session),
         source_pack_repository=EditorialSourcePackRepository(session),
-        require_real_editorial_backend=True,
+        require_real_editorial_backend=generator_mode == "openai",
     )

@@ -691,7 +691,7 @@ class CampaignRun:
         published_assets = [asset for asset in self.content_assets if asset.status is AssetStatus.PUBLISHED]
         active_assets = [asset for asset in self.content_assets if asset.status is not AssetStatus.CANCELLED]
         approved_assets = [asset for asset in active_assets if asset.status in {AssetStatus.APPROVED, AssetStatus.SCHEDULED, AssetStatus.PUBLISHING, AssetStatus.PUBLISHED}]
-        reviewable_assets = [asset for asset in active_assets if asset.status in {AssetStatus.READY_FOR_REVIEW, AssetStatus.QUALITY_CHECK, AssetStatus.CHANGES_REQUESTED, AssetStatus.DRAFT}]
+        reviewable_assets = [asset for asset in active_assets if asset.status in {AssetStatus.READY_FOR_REVIEW, AssetStatus.REVIEWED, AssetStatus.QUALITY_CHECK, AssetStatus.CHANGES_REQUESTED, AssetStatus.DRAFT}]
         failed_assets = [asset for asset in active_assets if asset.status is AssetStatus.FAILED]
         if published_assets:
             if active_assets and len(published_assets) == len(active_assets):
@@ -819,7 +819,7 @@ class CampaignRun:
         if not self.source_evidences:
             raise ApprovalPrerequisiteError(f"Campaign {self.id} has no source evidence to approve.")
         for asset in self.content_assets:
-            if asset.status in {AssetStatus.READY_FOR_REVIEW, AssetStatus.QUALITY_CHECK, AssetStatus.CHANGES_REQUESTED, AssetStatus.DRAFT}:
+            if asset.status in {AssetStatus.REVIEWED, AssetStatus.READY_FOR_REVIEW, AssetStatus.QUALITY_CHECK, AssetStatus.CHANGES_REQUESTED, AssetStatus.DRAFT}:
                 asset.approve(decided_by)
         decision = ApprovalDecision(
             campaign_run_id=self.id,

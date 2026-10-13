@@ -5,6 +5,30 @@ from app.infrastructure.repositories.campaigns import SqlAlchemyCampaignReposito
 from tests.support_auth import auth_headers
 
 
+def approve_all_assets(client, campaign_id: str, assets: list[dict]) -> dict:
+    approved = None
+    for asset in assets:
+        if asset.get("approved_version") == asset["version"] and asset.get("status") == "APPROVED":
+            approved = {"content_assets": assets, "status": "APPROVED"}
+            continue
+        review_response = client.post(
+            f"/studio-simple/campaigns/{campaign_id}/assets/{asset['id']}/review",
+            headers=auth_headers(roles=["ROLE_GROWTH_REVIEW"], jti=str(uuid4())),
+            json={"comment": "Reviewed in test", "expected_version": asset["version"]},
+        )
+        assert review_response.status_code == 200
+        reviewed_asset = next(item for item in review_response.json()["content_assets"] if item["id"] == asset["id"])
+        approve_response = client.post(
+            f"/studio-simple/campaigns/{campaign_id}/assets/{asset['id']}/approve",
+            headers=auth_headers(roles=["ROLE_GROWTH_APPROVE"], jti=str(uuid4())),
+            json={"comment": "Approved in test", "expected_version": reviewed_asset["version"]},
+        )
+        assert approve_response.status_code == 200
+        approved = approve_response.json()
+    assert approved is not None
+    return approved
+
+
 def test_simple_campaign_lifecycle(client) -> None:
     create_response = client.post(
         "/studio-simple/campaigns",
@@ -27,7 +51,7 @@ def test_simple_campaign_lifecycle(client) -> None:
     )
     assert generate_response.status_code == 200
     payload = generate_response.json()
-    assert payload["status"] == "READY"
+    assert payload["status"] == "READY_FOR_REVIEW"
     assert len(payload["content_assets"]) == 4
     assert {asset["channel"] for asset in payload["content_assets"]} == {"mapsi_site", "oling_site", "linkedin_manual", "email_manual"}
     mapsi_asset = next(asset for asset in payload["content_assets"] if asset["channel"] == "mapsi_site")
@@ -54,7 +78,7 @@ def test_simple_campaign_lifecycle(client) -> None:
     )
     assert regenerate_response.status_code == 200
     regenerated = regenerate_response.json()
-    assert regenerated["status"] == "READY"
+    assert regenerated["status"] == "READY_FOR_REVIEW"
     assert len(regenerated["content_assets"]) == 4
 
     linkedin_asset = next(asset for asset in regenerated["content_assets"] if asset["channel"] == "linkedin_manual")
@@ -82,6 +106,36 @@ def test_simple_campaign_lifecycle(client) -> None:
         },
     )
     assert stale_update_response.status_code == 409
+
+    publish_without_approval = client.post(
+        f"/studio-simple/campaigns/{campaign_id}/publish",
+        headers=auth_headers(roles=["ROLE_GROWTH_PUBLISH"], jti=str(uuid4())),
+        json={"channels": ["mapsi_site"]},
+    )
+    assert publish_without_approval.status_code == 409
+
+    refreshed = client.get(
+        f"/studio-simple/campaigns/{campaign_id}",
+        headers=auth_headers(roles=["ROLE_GROWTH_VIEWER"], jti=str(uuid4())),
+    )
+    assert refreshed.status_code == 200
+    approved_payload = approve_all_assets(client, campaign_id, refreshed.json()["content_assets"])
+    assert approved_payload["status"] == "APPROVED"
+    approved_linkedin = next(asset for asset in approved_payload["content_assets"] if asset["channel"] == "linkedin_manual")
+    edit_after_approval = client.put(
+        f"/studio-simple/campaigns/{campaign_id}/assets/{approved_linkedin['id']}",
+        headers=auth_headers(roles=["ROLE_GROWTH_REVIEW"], jti=str(uuid4())),
+        json={
+            "title": "LinkedIn modifie apres approbation",
+            "content_text": "Modification invalidant l'approbation.",
+            "expected_version": approved_linkedin["version"],
+        },
+    )
+    assert edit_after_approval.status_code == 200
+    edited_linkedin = next(asset for asset in edit_after_approval.json()["content_assets"] if asset["id"] == approved_linkedin["id"])
+    assert edited_linkedin["approved_version"] is None
+    reapproved_payload = approve_all_assets(client, campaign_id, edit_after_approval.json()["content_assets"])
+    assert reapproved_payload["status"] == "APPROVED"
 
     publish_partial = client.post(
         f"/studio-simple/campaigns/{campaign_id}/publish",
@@ -208,6 +262,10 @@ def test_openapi_prioritizes_simple_studio_and_hides_legacy_admin_workflows(clie
 
     assert "/studio-simple/campaigns" in paths
     assert "/studio-simple/campaigns/{campaign_id}/generate" in paths
+    assert "/studio-simple/campaigns/{campaign_id}/assets/{asset_id}/review" in paths
+    assert "/studio-simple/campaigns/{campaign_id}/assets/{asset_id}/approve" in paths
+    assert "/studio-simple/campaigns/{campaign_id}/archive" in paths
+    assert "/studio-simple/campaigns/{campaign_id}/unpublish" in paths
     assert "/api/admin/v1/campaigns" not in paths
     assert "/api/admin/v1/campaigns/{campaignId}" not in paths
     assert "/api/admin/v1/weekly-packs" not in paths
@@ -216,3 +274,122 @@ def test_openapi_prioritizes_simple_studio_and_hides_legacy_admin_workflows(clie
     assert "/api/admin/v1/assets/{assetId}/publish" not in paths
     assert "/campaigns" not in paths
     assert "/ops/campaigns/{campaign_id}/request-approval" not in paths
+
+
+def test_simple_campaign_can_be_deleted_before_publication(client) -> None:
+    create_response = client.post(
+        "/studio-simple/campaigns",
+        headers=auth_headers(roles=["ROLE_GROWTH_REVIEW"], jti=str(uuid4())),
+        json={
+            "name": "Campagne a supprimer",
+            "campaign_type": "MAPSI_MARKETING",
+            "theme": "Supprimer une ancienne campagne",
+            "selected_channels": ["mapsi_site", "oling_site"],
+        },
+    )
+    assert create_response.status_code == 201
+    campaign_id = create_response.json()["id"]
+
+    generate_response = client.post(
+        f"/studio-simple/campaigns/{campaign_id}/generate",
+        headers=auth_headers(roles=["ROLE_GROWTH_REVIEW"], jti=str(uuid4())),
+    )
+    assert generate_response.status_code == 200
+
+    delete_response = client.delete(
+        f"/studio-simple/campaigns/{campaign_id}",
+        headers=auth_headers(roles=["ROLE_GROWTH_PUBLISH"], jti=str(uuid4())),
+    )
+    assert delete_response.status_code == 204
+
+    get_response = client.get(
+        f"/studio-simple/campaigns/{campaign_id}",
+        headers=auth_headers(roles=["ROLE_GROWTH_VIEWER"], jti=str(uuid4())),
+    )
+    assert get_response.status_code == 404
+
+
+def test_simple_campaign_archive_and_unpublish_are_explicit(client) -> None:
+    create_response = client.post(
+        "/studio-simple/campaigns",
+        headers=auth_headers(roles=["ROLE_GROWTH_REVIEW"], jti=str(uuid4())),
+        json={
+            "name": "Campagne publiee",
+            "campaign_type": "MAPSI_MARKETING",
+            "theme": "Archiver sans supprimer",
+            "selected_channels": ["mapsi_site", "oling_site"],
+        },
+    )
+    assert create_response.status_code == 201
+    campaign_id = create_response.json()["id"]
+    generate_response = client.post(
+        f"/studio-simple/campaigns/{campaign_id}/generate",
+        headers=auth_headers(roles=["ROLE_GROWTH_REVIEW"], jti=str(uuid4())),
+    )
+    assert generate_response.status_code == 200
+    approve_all_assets(client, campaign_id, generate_response.json()["content_assets"])
+    publish_response = client.post(
+        f"/studio-simple/campaigns/{campaign_id}/publish",
+        headers=auth_headers(roles=["ROLE_GROWTH_PUBLISH"], jti=str(uuid4())),
+        json={"channels": ["mapsi_site", "oling_site"]},
+    )
+    assert publish_response.status_code == 200
+
+    delete_response = client.delete(
+        f"/studio-simple/campaigns/{campaign_id}",
+        headers=auth_headers(roles=["ROLE_GROWTH_PUBLISH"], jti=str(uuid4())),
+    )
+    assert delete_response.status_code == 409
+
+    unpublish_response = client.post(
+        f"/studio-simple/campaigns/{campaign_id}/unpublish",
+        headers=auth_headers(roles=["ROLE_GROWTH_PUBLISH"], jti=str(uuid4())),
+        json={"channels": ["mapsi_site"]},
+    )
+    assert unpublish_response.status_code == 200
+
+    archive_response = client.post(
+        f"/studio-simple/campaigns/{campaign_id}/archive",
+        headers=auth_headers(roles=["ROLE_GROWTH_PUBLISH"], jti=str(uuid4())),
+    )
+    assert archive_response.status_code == 200
+    assert archive_response.json()["status"] == "ARCHIVED"
+    list_response = client.get("/studio-simple/campaigns", headers=auth_headers(roles=["ROLE_GROWTH_VIEWER"], jti=str(uuid4())))
+    assert all(item["id"] != campaign_id for item in list_response.json())
+
+
+def test_simple_campaign_sanitizes_edited_html(client) -> None:
+    create_response = client.post(
+        "/studio-simple/campaigns",
+        headers=auth_headers(roles=["ROLE_GROWTH_REVIEW"], jti=str(uuid4())),
+        json={
+            "name": "Sanitation HTML",
+            "campaign_type": "OLING",
+            "theme": "Controle XSS synthétique",
+            "selected_channels": ["oling_site"],
+        },
+    )
+    assert create_response.status_code == 201
+    campaign_id = create_response.json()["id"]
+    generate_response = client.post(
+        f"/studio-simple/campaigns/{campaign_id}/generate",
+        headers=auth_headers(roles=["ROLE_GROWTH_REVIEW"], jti=str(uuid4())),
+    )
+    assert generate_response.status_code == 200
+    asset = generate_response.json()["content_assets"][0]
+
+    update_response = client.put(
+        f"/studio-simple/campaigns/{campaign_id}/assets/{asset['id']}",
+        headers=auth_headers(roles=["ROLE_GROWTH_REVIEW"], jti=str(uuid4())),
+        json={
+            "title": "HTML nettoye",
+            "content_html": '<h2 onclick="alert(1)">Titre</h2><script>alert(1)</script><a href="javascript:alert(1)">Lien</a>',
+            "content_text": "Texte propre",
+            "expected_version": asset["version"],
+        },
+    )
+    assert update_response.status_code == 200
+    updated_asset = update_response.json()["content_assets"][0]
+    assert "<script" not in updated_asset["content_html"]
+    assert "onclick" not in updated_asset["content_html"]
+    assert "javascript:" not in updated_asset["content_html"]

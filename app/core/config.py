@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     mautic_weekly_template_name: str = "MAPSI Weekly Update"
     mautic_weekly_campaign_name: str = "MAPSI Weekly Nurture Disabled"
     editorial_engine_mode: str = "simulated"
+    growth_generator_mode: str = "openai"
     editorial_agent_backend: str = "simulated"
     editorial_agent_model: str = "gpt-4.1-mini"
     editorial_agent_temperature: float = 0.2
