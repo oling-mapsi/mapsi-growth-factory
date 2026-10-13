@@ -9,7 +9,7 @@ from app.application.services.simple_campaign_service import (
     UpdateSimpleAssetCommand,
 )
 from app.core.security import GROWTH_PUBLISH, GROWTH_REVIEW, GROWTH_VIEW, require_studio_admin_permission
-from app.domain.errors import CampaignNotFoundError, CampaignPublicationForbiddenError, DomainError, InvalidStateTransitionError
+from app.domain.errors import CampaignNotFoundError, CampaignPublicationForbiddenError, DomainError, InvalidStateTransitionError, OptimisticLockError
 from app.entrypoints.api.dependencies import get_simple_campaign_service
 from app.entrypoints.api.simple_campaign_schemas import (
     OlingThemeCatalogResponse,
@@ -27,7 +27,7 @@ router = APIRouter(prefix="/studio-simple", tags=["studio-simple"])
 def _to_http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, CampaignNotFoundError):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
-    if isinstance(exc, (CampaignPublicationForbiddenError, InvalidStateTransitionError)):
+    if isinstance(exc, (CampaignPublicationForbiddenError, InvalidStateTransitionError, OptimisticLockError)):
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 

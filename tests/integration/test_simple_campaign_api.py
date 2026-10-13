@@ -72,6 +72,17 @@ def test_simple_campaign_lifecycle(client) -> None:
     assert updated_asset["title"] == "LinkedIn manuel"
     assert updated_asset["version"] == linkedin_asset["version"] + 1
 
+    stale_update_response = client.put(
+        f"/studio-simple/campaigns/{campaign_id}/assets/{linkedin_asset['id']}",
+        headers=auth_headers(roles=["ROLE_GROWTH_REVIEW"], jti=str(uuid4())),
+        json={
+            "title": "LinkedIn stale",
+            "content_text": "Version obsolete.",
+            "expected_version": linkedin_asset["version"],
+        },
+    )
+    assert stale_update_response.status_code == 409
+
     publish_partial = client.post(
         f"/studio-simple/campaigns/{campaign_id}/publish",
         headers=auth_headers(roles=["ROLE_GROWTH_PUBLISH"], jti=str(uuid4())),
