@@ -5,10 +5,12 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-os.environ["DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
+TEST_DATABASE_URL = os.environ.get("GROWTH_TEST_DATABASE_URL", "sqlite+pysqlite:///:memory:")
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["MAPSI_API_KEY"] = "test-key"
 os.environ["REDIS_URL"] = "redis://localhost:6379/15"
 os.environ["REDIS_QUEUE_NAME"] = "mapsi:test:tasks"
@@ -73,13 +75,22 @@ from app.main import create_app
 from app.mock_mapsi_site_server import STATE as MAPSI_SITE_STATE
 from app.mock_oling_server import STATE as OLING_STATE
 
-TEST_DATABASE_URL = "sqlite+pysqlite:///:memory:"
-engine = create_engine(
-    TEST_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-    future=True,
-)
+test_database_url = make_url(TEST_DATABASE_URL)
+if test_database_url.get_backend_name() == "sqlite":
+    engine = create_engine(
+        TEST_DATABASE_URL,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+else:
+    database_name = test_database_url.database or ""
+    host = test_database_url.host or "localhost"
+    if test_database_url.get_backend_name() == "postgresql" and (
+        host not in {"localhost", "127.0.0.1", "::1"} or not any(marker in database_name for marker in ("phase7", "staging", "test"))
+    ):
+        raise RuntimeError(f"Refusing unsafe test database URL: {TEST_DATABASE_URL}")
+    engine = create_engine(TEST_DATABASE_URL, future=True)
 TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 

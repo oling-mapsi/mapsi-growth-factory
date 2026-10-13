@@ -1,8 +1,19 @@
+import os
 from uuid import uuid4
 
 from app.domain.entities import CampaignRun
 from app.infrastructure.repositories.campaigns import SqlAlchemyCampaignRepository
 from tests.support_auth import auth_headers
+
+
+def test_simple_campaign_uses_expected_test_database(session) -> None:
+    expected = os.environ.get("GROWTH_TEST_EXPECTED_DIALECT")
+    if not expected:
+        return
+    assert session.bind is not None
+    assert session.bind.dialect.name == expected
+    if expected == "postgresql":
+        assert "phase7" in str(session.bind.url.database)
 
 
 def approve_all_assets(client, campaign_id: str, assets: list[dict]) -> dict:
