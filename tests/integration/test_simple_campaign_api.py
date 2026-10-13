@@ -347,6 +347,11 @@ def test_simple_campaign_archive_and_unpublish_are_explicit(client) -> None:
         json={"channels": ["mapsi_site"]},
     )
     assert unpublish_response.status_code == 200
+    unpublished_payload = unpublish_response.json()
+    assert unpublished_payload["status"] == "PARTIALLY_PUBLISHED"
+    channel_statuses = {asset["channel"]: asset["status"] for asset in unpublished_payload["content_assets"]}
+    assert channel_statuses["mapsi_site"] == "APPROVED"
+    assert channel_statuses["oling_site"] == "PUBLISHED"
 
     archive_response = client.post(
         f"/studio-simple/campaigns/{campaign_id}/archive",
@@ -393,3 +398,39 @@ def test_simple_campaign_sanitizes_edited_html(client) -> None:
     assert "<script" not in updated_asset["content_html"]
     assert "onclick" not in updated_asset["content_html"]
     assert "javascript:" not in updated_asset["content_html"]
+
+
+def test_simple_campaign_api_rejects_unauthorized_forbidden_and_invalid_requests(client) -> None:
+    missing_token = client.get("/studio-simple/campaigns")
+    assert missing_token.status_code == 401
+
+    expired_token = client.get(
+        "/studio-simple/campaigns",
+        headers=auth_headers(roles=["ROLE_GROWTH_VIEWER"], jti=str(uuid4()), expires_delta_seconds=-1000),
+    )
+    assert expired_token.status_code == 401
+
+    forbidden = client.post(
+        "/studio-simple/campaigns",
+        headers=auth_headers(roles=["ROLE_GROWTH_VIEWER"], jti=str(uuid4())),
+        json={
+            "name": "Refus droits",
+            "campaign_type": "OLING",
+            "theme": "Controle droits",
+            "selected_channels": ["oling_site"],
+        },
+    )
+    assert forbidden.status_code == 403
+
+    invalid_payload = client.post(
+        "/studio-simple/campaigns",
+        headers=auth_headers(roles=["ROLE_GROWTH_REVIEW"], jti=str(uuid4())),
+        json={"name": "Payload invalide"},
+    )
+    assert invalid_payload.status_code == 422
+
+    not_found = client.get(
+        "/studio-simple/campaigns/unknown",
+        headers=auth_headers(roles=["ROLE_GROWTH_VIEWER"], jti=str(uuid4())),
+    )
+    assert not_found.status_code == 404
