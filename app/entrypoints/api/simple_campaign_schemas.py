@@ -65,6 +65,8 @@ class SimpleAssetResponse(BaseModel):
     approved_version: int | None
     public_url: str
     published_at: datetime | None
+    editorial_quality: dict = Field(default_factory=dict)
+    quality_blocking: bool = False
 
 
 class SimpleCampaignResponse(BaseModel):
@@ -79,6 +81,7 @@ class SimpleCampaignResponse(BaseModel):
     updated_at: datetime
     content_assets: list[SimpleAssetResponse]
     publications: list[SimplePublicationResponse]
+    generation: dict | None = None
 
 
 class OlingThemeCatalogResponse(BaseModel):

@@ -819,6 +819,7 @@ class CampaignRun:
         if not self.source_evidences:
             raise ApprovalPrerequisiteError(f"Campaign {self.id} has no source evidence to approve.")
         for asset in self.content_assets:
+            self._assert_asset_editorial_quality(asset)
             if asset.status in {AssetStatus.REVIEWED, AssetStatus.READY_FOR_REVIEW, AssetStatus.QUALITY_CHECK, AssetStatus.CHANGES_REQUESTED, AssetStatus.DRAFT}:
                 asset.approve(decided_by)
         decision = ApprovalDecision(
@@ -835,6 +836,7 @@ class CampaignRun:
         if not self.source_evidences:
             raise ApprovalPrerequisiteError(f"Campaign {self.id} has no source evidence to approve.")
         asset = self._find_asset(asset_id)
+        self._assert_asset_editorial_quality(asset)
         asset.approve(decided_by)
         decision = ApprovalDecision(
             campaign_run_id=self.id,
@@ -845,6 +847,16 @@ class CampaignRun:
         self.approval_decisions.append(decision)
         self._sync_status_from_assets()
         return decision
+
+    def _assert_asset_editorial_quality(self, asset: ContentAsset) -> None:
+        quality = dict((asset.results or {}).get("editorial_quality") or {})
+        blocking_issues = [
+            item
+            for item in quality.get("issues", [])
+            if isinstance(item, dict) and item.get("severity") == "error"
+        ]
+        if quality and (not quality.get("passed", False) or blocking_issues):
+            raise ApprovalPrerequisiteError(f"Asset {asset.id} has blocking editorial quality issues.")
 
     def request_asset_changes(self, asset_id: str, comment: str, decided_by: str) -> ApprovalDecision:
         asset = self._find_asset(asset_id)

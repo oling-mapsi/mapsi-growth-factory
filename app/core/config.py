@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     mautic_weekly_campaign_name: str = "MAPSI Weekly Nurture Disabled"
     editorial_engine_mode: str = "simulated"
     growth_generator_mode: str = "openai"
+    simple_generation_worker_enabled: bool = False
     editorial_agent_backend: str = "simulated"
     editorial_agent_model: str = "gpt-6-astra"
     editorial_agent_fallback_model: str = "gpt-6.1-sol"

@@ -32,6 +32,7 @@ from app.domain.entities import CampaignRun, ContentAsset, EditorialBrief, Produ
 from app.domain.enums import AssetStatus, CampaignStatus
 from app.domain.errors import CampaignNotFoundError, CampaignPublicationForbiddenError, InvalidStateTransitionError
 from app.infrastructure.repositories.editorial_source_packs import EditorialSourcePackRepository
+from app.infrastructure.repositories.simple_generation_jobs import SimpleGenerationJobRepository
 from app.infrastructure.observability import structured_log
 from app.knowledge import KnowledgeRepository
 from app.knowledge.models import MapsiFeature, OlingPractice
@@ -168,6 +169,7 @@ class SimpleCampaignService:
         source_pack_repository: EditorialSourcePackRepository | None = None,
         image_service: GrowthImageGenerationService | None = None,
         seo_geo_service: GrowthSeoGeoService | None = None,
+        generation_jobs: SimpleGenerationJobRepository | None = None,
         require_real_editorial_backend: bool = False,
     ) -> None:
         self.repository = repository
@@ -180,6 +182,7 @@ class SimpleCampaignService:
         self.source_pack_repository = source_pack_repository
         self.image_service = image_service
         self.seo_geo_service = seo_geo_service or GrowthSeoGeoService()
+        self.generation_jobs = generation_jobs
         self.require_real_editorial_backend = require_real_editorial_backend
 
     def create_campaign(self, command: CreateSimpleCampaignCommand) -> CampaignRun:
@@ -310,6 +313,31 @@ class SimpleCampaignService:
         return campaign
 
     def generate_campaign(self, campaign_id: str) -> CampaignRun:
+        if self.generation_jobs is not None:
+            return self.enqueue_generation(campaign_id)
+        return self.run_generation(campaign_id)
+
+    def enqueue_generation(self, campaign_id: str) -> CampaignRun:
+        campaign = self.get_campaign(campaign_id)
+        self._assert_simple_campaign(campaign)
+        previous_status = campaign.status.value
+        job = self.generation_jobs.ensure_pending(campaign.id)
+        if campaign.status is CampaignStatus.GENERATING and job.status == "RUNNING":
+            return campaign
+        campaign.status = CampaignStatus.GENERATING
+        saved = self.repository.save(campaign)
+        self.audit_log.append(
+            saved.id,
+            "simple_campaign.generation_enqueued",
+            {"channels": saved.selected_channels},
+            actor_source="studio-simple",
+            previous_state={"status": previous_status},
+            new_state={"status": saved.status.value},
+            result="SUCCESS",
+        )
+        return saved
+
+    def run_generation(self, campaign_id: str, *, stage_callback=None) -> CampaignRun:
         campaign = self.get_campaign(campaign_id)
         self._assert_simple_campaign(campaign)
         started = time.perf_counter()
@@ -323,7 +351,7 @@ class SimpleCampaignService:
             channels=campaign.selected_channels,
         )
         try:
-            brief, assets, evidence = self._build_generation_payload(campaign)
+            brief, assets, evidence = self._build_generation_payload(campaign, stage_callback=stage_callback)
         except Exception as exc:
             campaign.status = CampaignStatus.FAILED
             saved = self.repository.save(campaign)
@@ -361,7 +389,7 @@ class SimpleCampaignService:
         structured_log("simple_campaign.generation.completed", campaign_id=saved.id, asset_count=len(saved.content_assets), duration_ms=duration_ms)
         return saved
 
-    def _build_generation_payload(self, campaign: CampaignRun) -> tuple[EditorialBrief, list[ContentAsset], list[SourceEvidence]]:
+    def _build_generation_payload(self, campaign: CampaignRun, *, stage_callback=None) -> tuple[EditorialBrief, list[ContentAsset], list[SourceEvidence]]:
         if self.require_real_editorial_backend:
             self._assert_real_editorial_backend()
         is_regeneration = bool(campaign.content_assets)
@@ -370,6 +398,8 @@ class SimpleCampaignService:
 
         results: dict[str, EditorialGenerationResult] = {}
         if "mapsi_site" in campaign.selected_channels:
+            if stage_callback:
+                stage_callback("DRAFTING")
             mapsi_context = self._build_mapsi_context(campaign, destination_site="mapsi.fr", article_type="MAPSI_PRODUCT")
             if is_regeneration:
                 mapsi_context.published_topic_history = []
@@ -377,8 +407,11 @@ class SimpleCampaignService:
                 context=mapsi_context,
                 selection=self._mapsi_selection(campaign),
                 allow_failed_quality=True,
+                progress_callback=stage_callback,
             )
         if "oling_site" in campaign.selected_channels:
+            if stage_callback:
+                stage_callback("DRAFTING")
             if campaign.campaign_type == "OLING":
                 oling_context = self._build_oling_context(campaign)
                 if is_regeneration:
@@ -387,6 +420,7 @@ class SimpleCampaignService:
                     context=oling_context,
                     selection=self._oling_selection(campaign),
                     allow_failed_quality=True,
+                    progress_callback=stage_callback,
                 )
             else:
                 consulting_context = self._build_mapsi_context(campaign, destination_site="oling.fr", article_type="MAPSI_CONSULTING")
@@ -396,10 +430,13 @@ class SimpleCampaignService:
                     context=consulting_context,
                     selection=self._mapsi_selection(campaign),
                     allow_failed_quality=True,
+                    progress_callback=stage_callback,
                 )
 
         primary_result = results.get("mapsi_site") or results.get("oling_site")
         if primary_result is None:
+            if stage_callback:
+                stage_callback("DRAFTING")
             if campaign.campaign_type == "OLING":
                 internal_context = self._build_oling_context(campaign)
                 internal_selection = self._oling_selection(campaign)
@@ -412,8 +449,11 @@ class SimpleCampaignService:
                 context=internal_context,
                 selection=internal_selection,
                 allow_failed_quality=True,
+                progress_callback=stage_callback,
             )
 
+        if stage_callback:
+            stage_callback("QUALITY_CHECK")
         evidence = self._collect_editorial_evidence(campaign.id, [result.context for result in [*results.values(), primary_result]])
         assets: list[ContentAsset] = []
         if "mapsi_site" in results:
@@ -486,6 +526,16 @@ class SimpleCampaignService:
             asset.assert_expected_version(command.expected_version)
         if asset.status not in {AssetStatus.REVIEWED, AssetStatus.READY_FOR_REVIEW, AssetStatus.APPROVED}:
             raise InvalidStateTransitionError(f"Asset {asset.id} must be reviewed before approval.")
+        quality = dict((asset.results or {}).get("editorial_quality") or {})
+        blocking_issues = [
+            item
+            for item in quality.get("issues", [])
+            if isinstance(item, dict) and item.get("severity") == "error"
+        ]
+        if quality and not quality.get("passed", False):
+            raise InvalidStateTransitionError("Asset has blocking editorial quality issues.")
+        if blocking_issues:
+            raise InvalidStateTransitionError("Asset has blocking editorial quality issues.")
         campaign.approve_asset(asset_id, command.comment, command.actor)
         saved = self.repository.save(campaign)
         self.audit_log.append(

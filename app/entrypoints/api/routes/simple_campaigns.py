@@ -49,6 +49,19 @@ def _image_payload(item, service: SimpleCampaignService, *, include_data_url: bo
 
 
 def _response(service: SimpleCampaignService, campaign, *, include_image_data: bool = True) -> SimpleCampaignResponse:
+    generation = None
+    if service.generation_jobs is not None:
+        job = service.generation_jobs.latest_for_campaign(campaign.id)
+        if job is not None:
+            generation = {
+                "id": job.id,
+                "status": job.status,
+                "stage": job.stage,
+                "error_type": job.error_type,
+                "error_message": job.error_message,
+                "attempts": job.attempts,
+                "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+            }
     return SimpleCampaignResponse(
         id=campaign.id,
         name=campaign.name,
@@ -72,6 +85,8 @@ def _response(service: SimpleCampaignService, campaign, *, include_image_data: b
                 illustration_suggestion=str((item.results or {}).get("illustration_suggestion", "")),
                 image=_image_payload(item, service, include_data_url=include_image_data),
                 seo_geo=dict((item.results or {}).get("seo_geo") or {}),
+                editorial_quality=dict((item.results or {}).get("editorial_quality") or {}),
+                quality_blocking=not bool(dict((item.results or {}).get("editorial_quality") or {}).get("passed", True)),
                 status=service.simple_asset_status(item),
                 version=item.content_version,
                 approved_by=item.approved_by,
@@ -92,6 +107,7 @@ def _response(service: SimpleCampaignService, campaign, *, include_image_data: b
             )
             for item in campaign.publications
         ],
+        generation=generation,
     )
 
 

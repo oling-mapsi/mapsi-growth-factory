@@ -1,0 +1,106 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from uuid import uuid4
+
+from sqlalchemy.orm import Session
+
+from app.infrastructure.db.models import SimpleGenerationJobModel
+
+
+ACTIVE_STATUSES = {"PENDING", "RUNNING"}
+
+
+class SimpleGenerationJobRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def latest_for_campaign(self, campaign_id: str) -> SimpleGenerationJobModel | None:
+        return (
+            self.session.query(SimpleGenerationJobModel)
+            .filter(SimpleGenerationJobModel.campaign_run_id == campaign_id)
+            .order_by(SimpleGenerationJobModel.created_at.desc())
+            .first()
+        )
+
+    def ensure_pending(self, campaign_id: str) -> SimpleGenerationJobModel:
+        latest = self.latest_for_campaign(campaign_id)
+        now = datetime.now(UTC)
+        if latest and latest.status in ACTIVE_STATUSES:
+            return latest
+        if latest and latest.status == "FAILED":
+            latest.status = "PENDING"
+            latest.stage = "WAITING"
+            latest.error_type = ""
+            latest.error_message = ""
+            latest.updated_at = now
+            self.session.commit()
+            self.session.refresh(latest)
+            return latest
+        job = SimpleGenerationJobModel(
+            id=str(uuid4()),
+            campaign_run_id=campaign_id,
+            status="PENDING",
+            stage="WAITING",
+            error_type="",
+            error_message="",
+            attempts=0,
+            created_at=now,
+            updated_at=now,
+        )
+        self.session.add(job)
+        self.session.commit()
+        self.session.refresh(job)
+        return job
+
+    def claim_next(self) -> SimpleGenerationJobModel | None:
+        job = (
+            self.session.query(SimpleGenerationJobModel)
+            .filter(SimpleGenerationJobModel.status == "PENDING")
+            .order_by(SimpleGenerationJobModel.created_at.asc())
+            .with_for_update(skip_locked=True)
+            .first()
+        )
+        if job is None:
+            return None
+        now = datetime.now(UTC)
+        job.status = "RUNNING"
+        job.stage = "DRAFTING"
+        job.attempts += 1
+        job.started_at = now
+        job.updated_at = now
+        self.session.commit()
+        self.session.refresh(job)
+        return job
+
+    def mark_stage(self, job_id: str, stage: str) -> None:
+        job = self.session.get(SimpleGenerationJobModel, job_id)
+        if job is None:
+            return
+        job.stage = stage
+        job.updated_at = datetime.now(UTC)
+        self.session.commit()
+
+    def mark_succeeded(self, job_id: str) -> None:
+        job = self.session.get(SimpleGenerationJobModel, job_id)
+        if job is None:
+            return
+        now = datetime.now(UTC)
+        job.status = "SUCCEEDED"
+        job.stage = "READY_FOR_REVIEW"
+        job.updated_at = now
+        job.completed_at = now
+        self.session.commit()
+
+    def mark_failed(self, job_id: str, exc: Exception) -> None:
+        job = self.session.get(SimpleGenerationJobModel, job_id)
+        if job is None:
+            return
+        now = datetime.now(UTC)
+        job.status = "FAILED"
+        job.stage = "FAILED"
+        job.error_type = type(exc).__name__
+        job.error_message = str(exc)[:4000]
+        job.updated_at = now
+        job.completed_at = now
+        self.session.commit()

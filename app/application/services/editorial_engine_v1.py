@@ -4,7 +4,6 @@ import json
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from abc import ABC, abstractmethod
 from collections import Counter
 from dataclasses import dataclass
@@ -84,7 +83,7 @@ class StructuredOutputEnvelope:
 
 class EditorialGeneratorInterface(ABC):
     @abstractmethod
-    def generate(self, context: EditorialGenerationContext) -> EditorialGenerationEnvelope:
+    def generate(self, context: EditorialGenerationContext, progress_callback=None) -> EditorialGenerationEnvelope:
         raise NotImplementedError
 
 
@@ -97,8 +96,10 @@ class OpenAIEditorialGenerator(EditorialGeneratorInterface):
         self.model_name = settings.editorial_agent_model
         self.temperature = settings.editorial_agent_temperature
 
-    def generate(self, context: EditorialGenerationContext) -> EditorialGenerationEnvelope:
+    def generate(self, context: EditorialGenerationContext, progress_callback=None) -> EditorialGenerationEnvelope:
         input_hash = sha256_hexdigest(context.model_dump_json())
+        if progress_callback:
+            progress_callback("DRAFTING")
         structured_log(
             "editorial.article.step.started",
             agent_name=self.agent_name,
@@ -120,6 +121,8 @@ class OpenAIEditorialGenerator(EditorialGeneratorInterface):
             publication_channel=context.publication_channel,
         )
         try:
+            if progress_callback:
+                progress_callback("REWRITING")
             structured_log(
                 "editorial.article.step.started",
                 agent_name="EditorialArticleRewriteAgent",
@@ -176,10 +179,7 @@ class OpenAIEditorialGenerator(EditorialGeneratorInterface):
         prompt_version: str,
     ) -> StructuredOutputEnvelope:
         started = time.perf_counter()
-        timeout_seconds = get_settings().editorial_agent_timeout_seconds
-        executor = ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(
-            self.provider.run_structured,
+        result = self.provider.run_structured(
             agent_name=agent_name,
             prompt=prompt,
             input_model=input_model,
@@ -188,14 +188,6 @@ class OpenAIEditorialGenerator(EditorialGeneratorInterface):
             prompt_version=prompt_version,
             temperature=self.temperature,
         )
-        try:
-            result = future.result(timeout=timeout_seconds)
-        except FutureTimeoutError as exc:
-            future.cancel()
-            structured_log("editorial.article.step.timeout", agent_name=agent_name, timeout_seconds=timeout_seconds)
-            raise EditorialGenerationBlockedError(f"{agent_name} timed out after {timeout_seconds:.0f}s.") from exc
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
         duration_ms = max(1, int((time.perf_counter() - started) * 1000))
         cost = _estimate_cost(result.metadata.token_usage)
         return StructuredOutputEnvelope(
@@ -275,7 +267,9 @@ class OpenAIEditorialGenerator(EditorialGeneratorInterface):
 
 
 class SimulatedEditorialGenerator(EditorialGeneratorInterface):
-    def generate(self, context: EditorialGenerationContext) -> EditorialGenerationEnvelope:
+    def generate(self, context: EditorialGenerationContext, progress_callback=None) -> EditorialGenerationEnvelope:
+        if progress_callback:
+            progress_callback("DRAFTING")
         article = self._article_for(context)
         output_hash = sha256_hexdigest(article.model_dump_json())
         input_hash = sha256_hexdigest(context.model_dump_json())
@@ -534,8 +528,11 @@ class EditorialGenerationService:
         persist: bool = False,
         selection: EditorialBuilderSelection | None = None,
         allow_failed_quality: bool = False,
+        progress_callback=None,
     ) -> EditorialGenerationResult:
-        envelope = self.generator.generate(context)
+        envelope = self.generator.generate(context, progress_callback=progress_callback)
+        if progress_callback:
+            progress_callback("QUALITY_CHECK")
         quality = self.validator.validate(envelope.article, context)
         record = EditorialGenerationRecord(
             article=envelope.article,

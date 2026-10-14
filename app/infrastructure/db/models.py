@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, JSON, Integer, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, JSON, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
@@ -107,6 +107,26 @@ class FeatureCommunicationCatalogModel(Base):
     minimum_repeat_delay: Mapped[int] = mapped_column(Integer, nullable=False, default=14)
     source_evidence_ids: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
+
+
+class SimpleGenerationJobModel(Base):
+    __tablename__ = "simple_generation_jobs"
+    __table_args__ = (
+        Index("ix_simple_generation_jobs_status_updated", "status", "updated_at"),
+        Index("ix_simple_generation_jobs_campaign_status", "campaign_run_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    campaign_run_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
+    stage: Mapped[str] = mapped_column(String(32), nullable=False, default="WAITING")
+    error_type: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    error_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class EditorialSourcePackModel(Base):

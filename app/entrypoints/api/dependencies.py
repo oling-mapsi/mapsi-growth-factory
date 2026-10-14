@@ -87,6 +87,7 @@ from app.infrastructure.repositories.mautic_publications import MauticPublicatio
 from app.infrastructure.repositories.linkedin import LinkedInOAuthTokenRepository, LinkedInPublicationRepository
 from app.infrastructure.repositories.oling import OlingNewsPublicationRepository
 from app.infrastructure.repositories.review_portal import ReviewPortalRepository
+from app.infrastructure.repositories.simple_generation_jobs import SimpleGenerationJobRepository
 from app.infrastructure.repositories.weekly_communication_packs import WeeklyCommunicationPackRepository
 from app.infrastructure.repositories.product_intelligence import (
     SqlAlchemyProductChangeRepository,
@@ -208,6 +209,7 @@ def get_simple_campaign_service(session: Session = Depends(get_db_session)) -> S
         source_pack_repository=EditorialSourcePackRepository(session),
         image_service=GrowthImageGenerationService(project_root=Path(__file__).resolve().parents[3]),
         seo_geo_service=GrowthSeoGeoService(),
+        generation_jobs=SimpleGenerationJobRepository(session),
         require_real_editorial_backend=generator_mode == "openai",
     )
 

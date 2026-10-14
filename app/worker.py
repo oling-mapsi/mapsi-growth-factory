@@ -2,8 +2,10 @@ import logging
 import time
 
 from app.application.services.task_worker_service import TaskWorkerService
+from app.application.services.simple_generation_worker import SimpleGenerationWorker
 from app.core.config import get_settings
 from app.core.db import SessionLocal
+from app.entrypoints.api.dependencies import get_simple_campaign_service
 from app.infrastructure.connectors.github import GitHubConnector
 from app.infrastructure.repositories.audit import SqlAlchemyAuditLogRepository
 from app.infrastructure.repositories.campaigns import SqlAlchemyCampaignRepository
@@ -25,6 +27,15 @@ def run_worker(poll_timeout: int = 5, max_jobs: int | None = None) -> int:
     queue = RedisTaskQueue(settings.redis_url, settings.redis_queue_name)
     processed = 0
     while True:
+        if settings.simple_generation_worker_enabled:
+            with SessionLocal() as session:
+                service = get_simple_campaign_service(session)
+                simple_worker = SimpleGenerationWorker(service.generation_jobs, service)
+                if simple_worker.process_one():
+                    processed += 1
+                    if max_jobs is not None and processed >= max_jobs:
+                        return processed
+                    continue
         job = queue.dequeue(timeout=poll_timeout)
         if job is None:
             if max_jobs is not None:
