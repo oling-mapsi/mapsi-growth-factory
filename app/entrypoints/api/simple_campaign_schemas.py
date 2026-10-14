@@ -49,6 +49,7 @@ class SimplePublicationResponse(BaseModel):
 class SimpleAssetResponse(BaseModel):
     id: str
     channel: str
+    locale: str = "fr-FR"
     asset_type: str
     title: str
     content_html: str | None

@@ -96,6 +96,7 @@ class EditorialGenerationContext(StrictModel):
     article_type: Literal["MAPSI_PRODUCT", "MAPSI_CONSULTING", "OLING_PRACTICE"]
     destination_site: Literal["mapsi.fr", "oling.fr"]
     publication_channel: Literal["mapsi_site", "oling_site"]
+    locale: StrictStr = "fr-FR"
     target_personas: list[StrictStr]
     knowledge_version: StrictStr
     positioning: StrictStr

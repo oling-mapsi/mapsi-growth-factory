@@ -76,6 +76,7 @@ def _response(service: SimpleCampaignService, campaign, *, include_image_data: b
             SimpleAssetResponse(
                 id=item.id,
                 channel=service.external_channel(item.channel),
+                locale=item.locale or "fr-FR",
                 asset_type=item.asset_type,
                 title=item.title,
                 content_html=item.content_html,

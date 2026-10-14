@@ -397,9 +397,10 @@ class SimpleCampaignService:
             raise InvalidStateTransitionError("Simple studio requires an editorial service and a knowledge repository.")
 
         results: dict[str, EditorialGenerationResult] = {}
+        oling_locales = ["fr-FR", "en-US", "es-ES"]
         if "mapsi_site" in campaign.selected_channels:
             if stage_callback:
-                stage_callback("DRAFTING")
+                stage_callback("DRAFTING_FR")
             mapsi_context = self._build_mapsi_context(campaign, destination_site="mapsi.fr", article_type="MAPSI_PRODUCT")
             if is_regeneration:
                 mapsi_context.published_topic_history = []
@@ -410,30 +411,30 @@ class SimpleCampaignService:
                 progress_callback=stage_callback,
             )
         if "oling_site" in campaign.selected_channels:
-            if stage_callback:
-                stage_callback("DRAFTING")
-            if campaign.campaign_type == "OLING":
-                oling_context = self._build_oling_context(campaign)
+            for locale in oling_locales:
+                if stage_callback:
+                    stage_callback(f"DRAFTING_{locale[:2].upper()}")
+                if campaign.campaign_type == "OLING":
+                    oling_context = self._build_oling_context(campaign, locale=locale)
+                    selection = self._oling_selection(campaign)
+                else:
+                    oling_context = self._build_mapsi_context(
+                        campaign,
+                        destination_site="oling.fr",
+                        article_type="MAPSI_CONSULTING",
+                        locale=locale,
+                    )
+                    selection = self._mapsi_selection(campaign)
                 if is_regeneration:
                     oling_context.published_topic_history = []
-                results["oling_site"] = self.editorial_service.generate_from_context(
+                results[f"oling_site:{locale}"] = self.editorial_service.generate_from_context(
                     context=oling_context,
-                    selection=self._oling_selection(campaign),
-                    allow_failed_quality=True,
-                    progress_callback=stage_callback,
-                )
-            else:
-                consulting_context = self._build_mapsi_context(campaign, destination_site="oling.fr", article_type="MAPSI_CONSULTING")
-                if is_regeneration:
-                    consulting_context.published_topic_history = []
-                results["oling_site"] = self.editorial_service.generate_from_context(
-                    context=consulting_context,
-                    selection=self._mapsi_selection(campaign),
+                    selection=selection,
                     allow_failed_quality=True,
                     progress_callback=stage_callback,
                 )
 
-        primary_result = results.get("mapsi_site") or results.get("oling_site")
+        primary_result = results.get("mapsi_site") or results.get("oling_site:fr-FR")
         if primary_result is None:
             if stage_callback:
                 stage_callback("DRAFTING")
@@ -457,9 +458,11 @@ class SimpleCampaignService:
         evidence = self._collect_editorial_evidence(campaign.id, [result.context for result in [*results.values(), primary_result]])
         assets: list[ContentAsset] = []
         if "mapsi_site" in results:
-            assets.append(self._asset_from_editorial_result(campaign, "mapsi_site", results["mapsi_site"], evidence))
-        if "oling_site" in results:
-            assets.append(self._asset_from_editorial_result(campaign, "oling_site", results["oling_site"], evidence))
+            assets.append(self._asset_from_editorial_result(campaign, "mapsi_site", results["mapsi_site"], evidence, locale="fr-FR"))
+        for locale in oling_locales:
+            key = f"oling_site:{locale}"
+            if key in results:
+                assets.append(self._asset_from_editorial_result(campaign, "oling_site", results[key], evidence, locale=locale))
         if "linkedin_manual" in campaign.selected_channels:
             assets.append(self._linkedin_asset_from_editorial(campaign, primary_result, evidence))
         if "email_manual" in campaign.selected_channels:
@@ -753,7 +756,14 @@ class SimpleCampaignService:
             rationale=[practice.description, campaign.theme],
         )
 
-    def _build_mapsi_context(self, campaign: CampaignRun, *, destination_site: str, article_type: str) -> EditorialGenerationContext:
+    def _locale_instruction(self, locale: str) -> str:
+        return {
+            "fr-FR": "Rediger integralement en francais.",
+            "en-US": "Write the full article in English for OLING resources, with idiomatic business English.",
+            "es-ES": "Redactar todo el articulo en espanol para los recursos de OLING, con tono profesional.",
+        }.get(locale, f"Respecter la langue cible {locale}.")
+
+    def _build_mapsi_context(self, campaign: CampaignRun, *, destination_site: str, article_type: str, locale: str = "fr-FR") -> EditorialGenerationContext:
         if self.knowledge_repository is None or self.editorial_service is None:
             raise InvalidStateTransitionError("Editorial service is not configured.")
         feature = self._select_mapsi_feature(campaign.theme)
@@ -773,6 +783,7 @@ class SimpleCampaignService:
             article_type=article_type,  # type: ignore[arg-type]
             destination_site=destination_site,  # type: ignore[arg-type]
             publication_channel="mapsi_site" if destination_site == "mapsi.fr" else "oling_site",  # type: ignore[arg-type]
+            locale=locale,
             target_personas=feature.target_roles or ["direction_metier", "responsable_transformation"],
             knowledge_version=rules.knowledge_version_hash,
             positioning=rules.mapsi_product_positioning,
@@ -811,10 +822,10 @@ class SimpleCampaignService:
             ),
             desired_title=campaign.theme,
             length_directive="longer",
-            angle_directive=angle,
+            angle_directive=f"{angle} {self._locale_instruction(locale)}",
         )
 
-    def _build_oling_context(self, campaign: CampaignRun) -> EditorialGenerationContext:
+    def _build_oling_context(self, campaign: CampaignRun, *, locale: str = "fr-FR") -> EditorialGenerationContext:
         if self.knowledge_repository is None or self.editorial_service is None:
             raise InvalidStateTransitionError("Editorial service is not configured.")
         practice = self._select_oling_practice(campaign.theme)
@@ -824,6 +835,7 @@ class SimpleCampaignService:
             article_type="OLING_PRACTICE",
             destination_site="oling.fr",
             publication_channel="oling_site",
+            locale=locale,
             target_personas=["dsi", "responsable_projet", "direction_metier"],
             knowledge_version=rules.knowledge_version_hash,
             positioning=rules.oling_company_profile,
@@ -855,7 +867,7 @@ class SimpleCampaignService:
             ),
             desired_title=campaign.theme,
             length_directive="longer",
-            angle_directive=f"Traiter le theme libre utilisateur suivant avec la practice {practice.title}: {campaign.theme}",
+            angle_directive=f"Traiter le theme libre utilisateur suivant avec la practice {practice.title}: {campaign.theme}. {self._locale_instruction(locale)}",
         )
 
     def _select_mapsi_feature(self, theme: str) -> MapsiFeature:
@@ -1112,6 +1124,8 @@ class SimpleCampaignService:
         channel: str,
         result: EditorialGenerationResult,
         evidence: list[SourceEvidence],
+        *,
+        locale: str = "fr-FR",
     ) -> ContentAsset:
         article = result.record.article
         evidence_ids = [
@@ -1124,7 +1138,7 @@ class SimpleCampaignService:
             campaign_run_id=campaign.id,
             asset_type="mapsi_news_article" if channel == "mapsi_site" else "oling_news_article",
             channel=internal_channel,
-            locale="fr-FR",
+            locale=locale,
             title=article.title,
             subject="",
             content_html=HtmlSanitizer.sanitize(article.body_html),
@@ -1137,6 +1151,7 @@ class SimpleCampaignService:
             audience_segment_id=campaign.campaign_type.casefold(),
             results={
                 "editorial_article": article.model_dump(mode="json"),
+                "locale": locale,
                 "editorial_quality": result.record.quality.model_dump(mode="json"),
                 "editorial_execution": {
                     "model": result.record.model_name,

@@ -212,7 +212,8 @@ def test_simple_generation_is_enqueued_and_processed_once(session) -> None:
 
     generated = repository.get(campaign.id)
     assert generated.status is CampaignStatus.READY_FOR_REVIEW
-    assert len(generated.content_assets) == 1
+    assert len(generated.content_assets) == 3
+    assert {asset.locale for asset in generated.content_assets if asset.channel == "oling"} == {"fr-FR", "en-US", "es-ES"}
     assert jobs.latest_for_campaign(campaign.id).status == "SUCCEEDED"
 
 

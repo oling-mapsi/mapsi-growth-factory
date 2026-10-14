@@ -237,6 +237,7 @@ class OpenAIEditorialGenerator(EditorialGeneratorInterface):
         return (
             f"{base_prompt}\n\n"
             f"Mode actif: {context.article_type}\n"
+            f"Langue de sortie obligatoire: {context.locale}\n"
             f"{mode_instructions[context.article_type]}\n"
             f"{channel_instructions[context.publication_channel]}\n"
             f"{signature[(context.article_type, context.publication_channel)]}\n"
@@ -266,6 +267,7 @@ class OpenAIEditorialGenerator(EditorialGeneratorInterface):
             f"Mode actif: {context.article_type}\n"
             f"Canal final: {context.publication_channel}\n"
             f"Destination: {context.destination_site}\n"
+            f"Langue de sortie obligatoire: {context.locale}\n"
             f"{voice[(context.article_type, context.publication_channel)]}\n"
             f"Contexte enrichi de campagne:\n{context.context_digest.strip() or 'Aucun contexte enrichi additionnel.'}\n"
             "Attendu final: un article qui parait avoir ete travaille par un redacteur senior, pas seulement genere."

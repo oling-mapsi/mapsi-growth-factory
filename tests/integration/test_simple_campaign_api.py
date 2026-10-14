@@ -63,8 +63,9 @@ def test_simple_campaign_lifecycle(client) -> None:
     assert generate_response.status_code == 200
     payload = generate_response.json()
     assert payload["status"] == "READY_FOR_REVIEW"
-    assert len(payload["content_assets"]) == 4
+    assert len(payload["content_assets"]) == 6
     assert {asset["channel"] for asset in payload["content_assets"]} == {"mapsi_site", "oling_site", "linkedin_manual", "email_manual"}
+    assert {asset["locale"] for asset in payload["content_assets"] if asset["channel"] == "oling_site"} == {"fr-FR", "en-US", "es-ES"}
     mapsi_asset = next(asset for asset in payload["content_assets"] if asset["channel"] == "mapsi_site")
     assert len(mapsi_asset["content_text"]) > 400
     assert "<ul>" in mapsi_asset["content_html"]
@@ -90,7 +91,7 @@ def test_simple_campaign_lifecycle(client) -> None:
     assert regenerate_response.status_code == 200
     regenerated = regenerate_response.json()
     assert regenerated["status"] == "READY_FOR_REVIEW"
-    assert len(regenerated["content_assets"]) == 4
+    assert len(regenerated["content_assets"]) == 6
 
     linkedin_asset = next(asset for asset in regenerated["content_assets"] if asset["channel"] == "linkedin_manual")
     update_response = client.put(
@@ -163,7 +164,7 @@ def test_simple_campaign_lifecycle(client) -> None:
     )
     assert publish_final.status_code == 200
     assert publish_final.json()["status"] == "PUBLISHED"
-    assert len(publish_final.json()["publications"]) == 4
+    assert len(publish_final.json()["publications"]) == 6
 
 
 def test_simple_campaign_hides_legacy_campaigns(client, session) -> None:
