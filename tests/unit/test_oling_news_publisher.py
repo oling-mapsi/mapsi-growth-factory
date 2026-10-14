@@ -46,7 +46,7 @@ def build_publisher(session, *, mode: str = "live", retries: int = 1, breaker_th
     )
 
 
-def seed_campaign(session, *, title: str = "Article Oling", status: AssetStatus = AssetStatus.APPROVED, approved_hash_matches: bool = True):
+def seed_campaign(session, *, title: str = "Article Oling", locale: str = "fr-FR", status: AssetStatus = AssetStatus.APPROVED, approved_hash_matches: bool = True):
     campaign = CampaignRun(name="Oling campaign", objective="awareness", status=CampaignStatus.APPROVED)
     campaign.audience_segments.append(AudienceSegment(campaign_run_id=campaign.id, name="Prospects", description="Prospects"))
     campaign.source_evidences.append(SourceEvidence(campaign_run_id=campaign.id, source_system="mapsi", reference="mapsi:1"))
@@ -54,6 +54,7 @@ def seed_campaign(session, *, title: str = "Article Oling", status: AssetStatus 
         campaign_run_id=campaign.id,
         asset_type="oling_news_article",
         channel="oling",
+        locale=locale,
         title=title,
         content_html="<p>Contenu riche</p>",
         content_text="Contenu riche",
@@ -105,6 +106,21 @@ def test_oling_publish_and_preview_are_persisted(session, monkeypatch) -> None:
     assert asset.external_publication_url == "https://www.oling.fr/ressources/article-oling"
 
 
+def test_oling_preview_payload_carries_locale_and_article_canonical(session) -> None:
+    get_settings.cache_clear()
+    publisher = build_publisher(session)
+    campaign = seed_campaign(session, title="Artículo OLING con acentos", locale="es-ES")
+    asset = campaign.content_assets[0]
+
+    publisher.create_preview(campaign, asset)
+    payload = STATE["articles"][campaign.id]["payload"]
+
+    assert payload["locale"] == "es"
+    assert payload["content_group_id"] == campaign.id
+    assert payload["slug"] == "articulo-oling-con-acentos"
+    assert payload["canonical_url"] == "https://www.oling.fr/es/recursos/articulo-oling-con-acentos"
+
+
 def test_oling_publish_is_idempotent_for_same_asset_hash(session) -> None:
     get_settings.cache_clear()
     publisher = build_publisher(session)
@@ -116,6 +132,50 @@ def test_oling_publish_is_idempotent_for_same_asset_hash(session) -> None:
 
     assert first.external_reference == second.external_reference
     assert len(STATE["articles"]) == 1
+
+
+def test_oling_multilingual_assets_share_editorial_article(session) -> None:
+    get_settings.cache_clear()
+    publisher = build_publisher(session)
+    campaign = seed_campaign(session, title="Article français", locale="fr-FR")
+    english = ContentAsset(
+        campaign_run_id=campaign.id,
+        asset_type="oling_news_article",
+        channel="oling",
+        locale="en-US",
+        title="English article",
+        content_html="<p>English content</p>",
+        content_text="English content",
+        excerpt="English summary",
+        audience_segment_id=campaign.audience_segments[0].id,
+        status=AssetStatus.APPROVED,
+    )
+    spanish = ContentAsset(
+        campaign_run_id=campaign.id,
+        asset_type="oling_news_article",
+        channel="oling",
+        locale="es-ES",
+        title="Artículo español",
+        content_html="<p>Contenido español</p>",
+        content_text="Contenido español",
+        excerpt="Resumen español",
+        audience_segment_id=campaign.audience_segments[0].id,
+        status=AssetStatus.APPROVED,
+    )
+    for item in (english, spanish):
+        item.ensure_content_hash()
+        item.approved_content_hash = item.content_hash
+        item.approved_by = "approver"
+        item.approved_at = datetime.now(UTC)
+        campaign.content_assets.append(item)
+    campaign = SqlAlchemyCampaignRepository(session).save(campaign)
+
+    for item in campaign.content_assets:
+        publisher.create_preview(campaign, item)
+
+    article = STATE["articles"][campaign.id]
+    assert len(STATE["articles"]) == 1
+    assert {item["locale"] for item in article["locales"]} == {"fr", "en", "es"}
 
 
 def test_oling_publish_reuses_existing_result_for_same_hash(session) -> None:

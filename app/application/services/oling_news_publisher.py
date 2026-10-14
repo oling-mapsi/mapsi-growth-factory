@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from datetime import datetime
 from typing import Any
 
@@ -57,7 +58,8 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
 
     def create_preview(self, campaign: CampaignRun, asset: ContentAsset) -> dict:
         publication = self._upsert_draft(campaign, asset, operation="preview")
-        preview = self.connector.get_preview_url(asset.id, correlation_id=self._correlation_id(campaign, asset, "preview-url"))
+        remote_id = self._remote_external_id(campaign, asset)
+        preview = self.connector.get_preview_url(remote_id, correlation_id=self._correlation_id(campaign, asset, "preview-url"))
         publication.preview_url = preview.get("preview_url", "")
         publication.status = "draft"
         publication.publication_mode_requested = "preview"
@@ -104,9 +106,10 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
             asset.mark_publishing()
         self._apply_asset_results(asset, publication)
         self._save_campaign_asset(campaign, asset)
-        preview = self.connector.get_preview_url(asset.id, correlation_id=self._correlation_id(campaign, asset, "preview-url"))
+        remote_id = self._remote_external_id(campaign, asset)
+        preview = self.connector.get_preview_url(remote_id, correlation_id=self._correlation_id(campaign, asset, "preview-url"))
         try:
-            status = self.connector.publish(asset.id, correlation_id=self._correlation_id(campaign, asset, "publish"))
+            status = self.connector.publish(remote_id, correlation_id=self._correlation_id(campaign, asset, "publish"))
         except ExternalConnectorError as exc:
             status = self._reconcile_after_publish_error(campaign, asset, publication, exc)
         publication.preview_url = preview.get("preview_url", publication.preview_url)
@@ -155,7 +158,7 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
         else:
             self._push_draft(asset, campaign, method="PATCH")
             publication = self.publication_repository.get_latest_for_asset(asset.id) or publication
-        status = self.connector.get_status(asset.id, correlation_id=self._correlation_id(campaign, asset, "status"))
+        status = self.connector.get_status(self._remote_external_id(campaign, asset), correlation_id=self._correlation_id(campaign, asset, "status"))
         self._apply_status(publication, asset, status)
         publication.published_content_version = asset.content_version if publication.published_revision_number else publication.published_content_version
         publication.last_error = ""
@@ -174,7 +177,7 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
         publication = self.publication_repository.get_latest_for_asset(asset.id)
         if publication is None:
             raise CampaignPublicationForbiddenError("Oling publication not found for this asset.")
-        status = self.connector.unpublish(asset.id, correlation_id=self._correlation_id(campaign, asset, "unpublish"))
+        status = self.connector.unpublish(self._remote_external_id(campaign, asset), correlation_id=self._correlation_id(campaign, asset, "unpublish"))
         self._apply_status(publication, asset, status)
         publication.status = status.get("publication_status", "unpublished")
         publication = self.publication_repository.save(publication)
@@ -195,7 +198,7 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
         return True
 
     def get_publication_status(self, campaign: CampaignRun, asset: ContentAsset) -> dict:
-        status = self.connector.get_status(asset.id, correlation_id=self._correlation_id(campaign, asset, "status"))
+        status = self.connector.get_status(self._remote_external_id(campaign, asset), correlation_id=self._correlation_id(campaign, asset, "status"))
         publication = self.publication_repository.get_latest_for_asset(asset.id) or OlingNewsPublication(
             campaign_run_id=campaign.id,
             content_asset_id=asset.id,
@@ -333,7 +336,7 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
             raise DuplicateCampaignPublicationError("This Oling asset version has already been published.")
         payload = self._payload_for(campaign, asset)
         self._push_draft(asset, campaign, method="PATCH" if existing else "POST", payload=payload)
-        status = self.connector.get_status(asset.id, correlation_id=self._correlation_id(campaign, asset, "status"))
+        status = self.connector.get_status(self._remote_external_id(campaign, asset), correlation_id=self._correlation_id(campaign, asset, "status"))
         publication.content_hash = asset.content_hash
         publication.mode = self.settings.oling_mode
         publication.publication_mode_requested = operation
@@ -357,7 +360,7 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
         correlation_id = self._correlation_id(campaign, asset, f"draft-{method.lower()}")
         try:
             if method == "PATCH":
-                return self.connector.update_draft(asset.id, body, correlation_id=correlation_id)
+                return self.connector.update_draft(self._remote_external_id(campaign, asset), body, correlation_id=correlation_id)
             return self.connector.create_draft(body, correlation_id=correlation_id)
         except ExternalConnectorError as exc:
             asset.mark_failed(str(exc))
@@ -365,7 +368,7 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
             raise
 
     def _refresh_preview(self, campaign: CampaignRun, asset: ContentAsset, publication: OlingNewsPublication) -> None:
-        preview = self.connector.get_preview_url(asset.id, correlation_id=self._correlation_id(campaign, asset, "preview-url"))
+        preview = self.connector.get_preview_url(self._remote_external_id(campaign, asset), correlation_id=self._correlation_id(campaign, asset, "preview-url"))
         publication.preview_url = preview.get("preview_url", publication.preview_url)
         publication.publication_mode_requested = "preview"
         publication.publication_mode_executed = self._executed_mode("preview")
@@ -379,14 +382,16 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
         excerpt = asset.excerpt or asset.content_text[:280]
         content_html = asset.content_html or asset.body or f"<p>{asset.content_text}</p>"
         return {
-            "external_id": asset.id,
+            "external_id": self._remote_external_id(campaign, asset),
             "title": asset.title,
             "slug": self._slugify(asset.title),
+            "locale": self._oling_locale(asset.locale),
+            "content_group_id": campaign.id,
             "excerpt": excerpt,
             "content_html": content_html,
             "meta_title": asset.title,
             "meta_description": excerpt,
-            "canonical_url": "",
+            "canonical_url": self._public_url_for_slug(self._slugify(asset.title), self._oling_locale(asset.locale)),
             "featured_image": None,
             "categories": [],
             "tags": [],
@@ -397,7 +402,8 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
         }
 
     def _slugify(self, value: str) -> str:
-        slug = re.sub(r"[^a-z0-9]+", "-", value.lower())
+        normalized = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+        slug = re.sub(r"[^a-z0-9]+", "-", normalized.lower())
         slug = re.sub(r"-{2,}", "-", slug).strip("-")
         return slug or "actualite-growth"
 
@@ -410,13 +416,23 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
         publication.published_revision_number = status.get("published_revision_number", publication.published_revision_number)
         publication.published_at = self._parse_dt(status.get("published_at")) or publication.published_at
         publication.unpublished_at = self._parse_dt(status.get("unpublished_at")) or publication.unpublished_at
-        publication.public_url = self._public_url(publication.public_slug)
-        publication.metrics = {**publication.metrics, **status}
+        publication.public_url = self._public_url_for_slug(publication.public_slug, self._oling_locale(asset.locale))
+        publication.metrics = {**publication.metrics, **status, "remote_external_id": status.get("external_id")}
 
     def _public_url(self, public_slug: str) -> str:
+        return self._public_url_for_slug(public_slug, "fr")
+
+    def _public_url_for_slug(self, public_slug: str, locale: str) -> str:
         if not public_slug:
             return ""
-        return f"{self.settings.oling_site_base_url.rstrip('/')}/ressources/{public_slug}"
+        prefix = {"fr": "ressources", "en": "en/resources", "es": "es/recursos"}.get(locale, "ressources")
+        return f"{self.settings.oling_site_base_url.rstrip('/')}/{prefix}/{public_slug}"
+
+    def _oling_locale(self, locale: str) -> str:
+        return {"fr-FR": "fr", "en-US": "en", "es-ES": "es"}.get(locale or "fr-FR", "fr")
+
+    def _remote_external_id(self, campaign: CampaignRun, asset: ContentAsset) -> str:
+        return campaign.id if asset.channel == "oling" else asset.id
 
     def _parse_dt(self, value: Any):
         if not value:
@@ -539,7 +555,7 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
         error: ExternalConnectorError,
     ) -> dict[str, Any]:
         try:
-            status = self.connector.get_status(asset.id, correlation_id=self._correlation_id(campaign, asset, "status-after-error"))
+            status = self.connector.get_status(self._remote_external_id(campaign, asset), correlation_id=self._correlation_id(campaign, asset, "status-after-error"))
         except ExternalConnectorError:
             publication.last_error = str(error)
             publication.publication_status = "FAILED"

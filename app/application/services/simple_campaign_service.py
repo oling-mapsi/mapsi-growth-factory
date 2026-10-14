@@ -275,6 +275,8 @@ class SimpleCampaignService:
             html=asset.content_html or asset.body,
             text=asset.content_text,
             image_alt=str(image.get("alt_text") or ""),
+            locale=asset.locale or "fr-FR",
+            public_url=asset.external_publication_url or "",
         )
         asset.results = dict(asset.results or {})
         asset.results["seo_geo"] = {
@@ -372,8 +374,11 @@ class SimpleCampaignService:
                 duration_ms=duration_ms,
             )
             raise
-        campaign.source_evidences = evidence
-        campaign.mark_generated(brief, assets)
+        campaign = self.repository.get(campaign.id) or campaign
+        existing_evidence_ids = {item.id for item in campaign.source_evidences}
+        campaign.source_evidences.extend([item for item in evidence if item.id not in existing_evidence_ids])
+        merged_assets = self._merge_generated_assets(campaign.content_assets, assets)
+        campaign.mark_generated(brief, merged_assets)
         campaign._sync_status_from_assets()
         saved = self.repository.save(campaign)
         duration_ms = max(1, int((time.perf_counter() - started) * 1000))
@@ -399,43 +404,59 @@ class SimpleCampaignService:
         results: dict[str, EditorialGenerationResult] = {}
         oling_locales = ["fr-FR", "en-US", "es-ES"]
         if "mapsi_site" in campaign.selected_channels:
-            if stage_callback:
-                stage_callback("DRAFTING_FR")
-            mapsi_context = self._build_mapsi_context(campaign, destination_site="mapsi.fr", article_type="MAPSI_PRODUCT")
-            if is_regeneration:
-                mapsi_context.published_topic_history = []
-            results["mapsi_site"] = self.editorial_service.generate_from_context(
-                context=mapsi_context,
-                selection=self._mapsi_selection(campaign),
-                allow_failed_quality=True,
-                progress_callback=stage_callback,
-            )
-        if "oling_site" in campaign.selected_channels:
-            for locale in oling_locales:
+            existing = self._existing_generated_article_asset(campaign, "mapsi_site", "fr-FR")
+            if existing is None:
                 if stage_callback:
-                    stage_callback(f"DRAFTING_{locale[:2].upper()}")
-                if campaign.campaign_type == "OLING":
-                    oling_context = self._build_oling_context(campaign, locale=locale)
-                    selection = self._oling_selection(campaign)
-                else:
-                    oling_context = self._build_mapsi_context(
-                        campaign,
-                        destination_site="oling.fr",
-                        article_type="MAPSI_CONSULTING",
-                        locale=locale,
-                    )
-                    selection = self._mapsi_selection(campaign)
-                if is_regeneration:
-                    oling_context.published_topic_history = []
-                results[f"oling_site:{locale}"] = self.editorial_service.generate_from_context(
-                    context=oling_context,
-                    selection=selection,
+                    stage_callback("DRAFTING_FR")
+                mapsi_context = self._build_mapsi_context(campaign, destination_site="mapsi.fr", article_type="MAPSI_PRODUCT")
+                if is_regeneration or campaign.content_assets:
+                    mapsi_context.published_topic_history = []
+                results["mapsi_site"] = self.editorial_service.generate_from_context(
+                    context=mapsi_context,
+                    selection=self._mapsi_selection(campaign),
                     allow_failed_quality=True,
                     progress_callback=stage_callback,
                 )
+                evidence = self._collect_editorial_evidence(campaign.id, [results["mapsi_site"].context])
+                self._save_progressive_article_asset(
+                    campaign,
+                    self._asset_from_editorial_result(campaign, "mapsi_site", results["mapsi_site"], evidence, locale="fr-FR"),
+                    evidence,
+                )
+        if "oling_site" in campaign.selected_channels:
+            for locale in oling_locales:
+                existing = self._existing_generated_article_asset(campaign, "oling_site", locale)
+                if existing is None:
+                    if stage_callback:
+                        stage_callback(f"DRAFTING_{locale[:2].upper()}")
+                    if campaign.campaign_type == "OLING":
+                        oling_context = self._build_oling_context(campaign, locale=locale)
+                        selection = self._oling_selection(campaign)
+                    else:
+                        oling_context = self._build_mapsi_context(
+                            campaign,
+                            destination_site="oling.fr",
+                            article_type="MAPSI_CONSULTING",
+                            locale=locale,
+                        )
+                        selection = self._mapsi_selection(campaign)
+                    if is_regeneration or campaign.content_assets:
+                        oling_context.published_topic_history = []
+                    results[f"oling_site:{locale}"] = self.editorial_service.generate_from_context(
+                        context=oling_context,
+                        selection=selection,
+                        allow_failed_quality=True,
+                        progress_callback=stage_callback,
+                    )
+                    evidence = self._collect_editorial_evidence(campaign.id, [results[f"oling_site:{locale}"].context])
+                    self._save_progressive_article_asset(
+                        campaign,
+                        self._asset_from_editorial_result(campaign, "oling_site", results[f"oling_site:{locale}"], evidence, locale=locale),
+                        evidence,
+                    )
 
         primary_result = results.get("mapsi_site") or results.get("oling_site:fr-FR")
-        if primary_result is None:
+        if primary_result is None and ("linkedin_manual" in campaign.selected_channels or "email_manual" in campaign.selected_channels):
             if stage_callback:
                 stage_callback("DRAFTING")
             if campaign.campaign_type == "OLING":
@@ -444,7 +465,7 @@ class SimpleCampaignService:
             else:
                 internal_context = self._build_mapsi_context(campaign, destination_site="mapsi.fr", article_type="MAPSI_PRODUCT")
                 internal_selection = self._mapsi_selection(campaign)
-            if is_regeneration:
+            if is_regeneration or campaign.content_assets:
                 internal_context.published_topic_history = []
             primary_result = self.editorial_service.generate_from_context(
                 context=internal_context,
@@ -455,7 +476,10 @@ class SimpleCampaignService:
 
         if stage_callback:
             stage_callback("QUALITY_CHECK")
-        evidence = self._collect_editorial_evidence(campaign.id, [result.context for result in [*results.values(), primary_result]])
+        result_contexts = [result.context for result in results.values()]
+        if primary_result is not None and primary_result.context not in result_contexts:
+            result_contexts.append(primary_result.context)
+        evidence = self._collect_editorial_evidence(campaign.id, result_contexts)
         assets: list[ContentAsset] = []
         if "mapsi_site" in results:
             assets.append(self._asset_from_editorial_result(campaign, "mapsi_site", results["mapsi_site"], evidence, locale="fr-FR"))
@@ -469,10 +493,48 @@ class SimpleCampaignService:
             assets.append(self._email_asset_from_editorial(campaign, primary_result, evidence))
         brief = EditorialBrief(
             campaign_run_id=campaign.id,
-            title=primary_result.record.article.title,
-            summary=primary_result.record.article.excerpt,
+            title=primary_result.record.article.title if primary_result else (campaign.editorial_briefs[0].title if campaign.editorial_briefs else campaign.name),
+            summary=primary_result.record.article.excerpt if primary_result else (campaign.editorial_briefs[0].summary if campaign.editorial_briefs else campaign.objective),
         )
         return brief, assets, evidence
+
+    def _merge_generated_assets(self, existing_assets: list[ContentAsset], new_assets: list[ContentAsset]) -> list[ContentAsset]:
+        merged = list(existing_assets)
+        for asset in new_assets:
+            for index, existing in enumerate(merged):
+                if existing.channel == asset.channel and (existing.locale or "fr-FR") == (asset.locale or "fr-FR"):
+                    if existing.status in {AssetStatus.FAILED, AssetStatus.CANCELLED}:
+                        merged[index] = asset
+                    break
+            else:
+                merged.append(asset)
+        return merged
+
+    def _existing_generated_article_asset(self, campaign: CampaignRun, channel: str, locale: str) -> ContentAsset | None:
+        internal_channel = CHANNEL_TO_INTERNAL[channel]
+        for asset in campaign.content_assets:
+            if asset.channel != internal_channel or (asset.locale or "fr-FR") != locale:
+                continue
+            if asset.status in {AssetStatus.FAILED, AssetStatus.CANCELLED}:
+                continue
+            if (asset.content_html or asset.content_text or asset.body).strip():
+                return asset
+        return None
+
+    def _save_progressive_article_asset(self, campaign: CampaignRun, asset: ContentAsset, evidence: list[SourceEvidence]) -> None:
+        asset.status = AssetStatus.READY_FOR_REVIEW
+        existing_assets = [
+            item
+            for item in campaign.content_assets
+            if not (item.channel == asset.channel and (item.locale or "fr-FR") == (asset.locale or "fr-FR") and item.status in {AssetStatus.FAILED, AssetStatus.CANCELLED})
+        ]
+        if not any(item.channel == asset.channel and (item.locale or "fr-FR") == (asset.locale or "fr-FR") for item in existing_assets):
+            existing_assets.append(asset)
+        campaign.content_assets = existing_assets
+        existing_evidence_ids = {item.id for item in campaign.source_evidences}
+        campaign.source_evidences.extend([item for item in evidence if item.id not in existing_evidence_ids])
+        campaign._sync_status_from_assets()
+        self.repository.save(campaign)
 
     def update_asset(self, campaign_id: str, asset_id: str, command: UpdateSimpleAssetCommand) -> CampaignRun:
         campaign = self.get_campaign(campaign_id)

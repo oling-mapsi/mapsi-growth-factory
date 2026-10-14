@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
+import unicodedata
 
 import httpx
 
@@ -17,29 +18,42 @@ class GrowthSeoGeoResult:
 
 
 class GrowthSeoGeoService:
-    OILING_LINKS = [
-        {"label": "OLING", "url": "https://oling.fr/"},
-        {"label": "Ressources OLING", "url": "https://oling.fr/ressources"},
-        {"label": "AMOA SI", "url": "https://oling.fr/amoa-si"},
-        {"label": "Contact OLING", "url": "https://oling.fr/contact"},
-    ]
+    OILING_LINKS = {
+        "fr-FR": [
+            {"label": "Ressources OLING", "url": "https://oling.fr/ressources"},
+            {"label": "AMOA SI", "url": "https://oling.fr/amoa-si"},
+            {"label": "Contact OLING", "url": "https://oling.fr/contact"},
+        ],
+        "en-US": [
+            {"label": "OLING resources", "url": "https://oling.fr/en/resources"},
+            {"label": "Contact OLING", "url": "https://oling.fr/en/contact"},
+        ],
+        "es-ES": [
+            {"label": "Recursos OLING", "url": "https://oling.fr/es/recursos"},
+            {"label": "Contacto OLING", "url": "https://oling.fr/es/contacto"},
+        ],
+    }
     MAPSI_LINKS = [
         {"label": "MAPSI", "url": "https://mapsi.fr/"},
         {"label": "MAPSI logiciel QHSE", "url": "https://mapsi.fr/fr/"},
     ]
 
-    def prepare(self, *, channel: str, title: str, html: str, text: str, image_alt: str = "") -> GrowthSeoGeoResult:
-        links = self._verified_links(self.MAPSI_LINKS if channel == "mapsi_site" else self.OILING_LINKS)
+    def prepare(self, *, channel: str, title: str, html: str, text: str, image_alt: str = "", locale: str = "fr-FR", public_url: str = "") -> GrowthSeoGeoResult:
+        slug = self._slugify(title)
+        links = self._verified_links(self.MAPSI_LINKS if channel == "mapsi_site" else self.OILING_LINKS.get(locale, self.OILING_LINKS["fr-FR"]))
         enriched_html = self._insert_links(html, links)
+        canonical = public_url.strip() or self._canonical_url(channel=channel, locale=locale, slug=slug)
         metadata = {
             "h1": title,
             "seo_title": title[:70],
             "meta_description": self._summary(text, 155),
-            "slug": self._slugify(title),
-            "canonical": links[0]["url"] if links else "",
+            "slug": slug,
+            "canonical": canonical,
             "primary_keyword": self._primary_keyword(title),
             "summary": self._summary(text, 260),
-            "image_alt": image_alt,
+            "image_alt": image_alt.strip() or self._localized_image_alt(title, locale),
+            "locale": locale,
+            "hreflang": [],
             "open_graph": {"title": title[:70], "description": self._summary(text, 155)},
             "json_ld": {
                 "@context": "https://schema.org",
@@ -48,7 +62,7 @@ class GrowthSeoGeoService:
                 "description": self._summary(text, 155),
             },
         }
-        checks = self._checks(title=title, html=enriched_html, text=text, metadata=metadata, links=links, image_alt=image_alt)
+        checks = self._checks(title=title, html=enriched_html, text=text, metadata=metadata, links=links, image_alt=metadata["image_alt"])
         status = "READY" if all(item["passed"] for item in checks if item["severity"] == "error") else "NEEDS_FIX"
         return GrowthSeoGeoResult(status=status, checks=checks, metadata=metadata, internal_links=links, html=enriched_html)
 
@@ -67,10 +81,15 @@ class GrowthSeoGeoService:
         return verified[:4]
 
     def _insert_links(self, html: str, links: list[dict]) -> str:
-        if not links or "A lire aussi" in html:
+        if not links or "A lire aussi" in html or "Read also" in html or "También puede leer" in html:
             return html
+        heading = "A lire aussi"
+        if any("/en/" in str(link.get("final_url", "")) for link in links):
+            heading = "Read also"
+        elif any("/es/" in str(link.get("final_url", "")) for link in links):
+            heading = "También puede leer"
         items = "".join(f'<li><a href="{link["final_url"]}">{link["label"]}</a></li>' for link in links[:3])
-        return html.rstrip() + f"<h2>A lire aussi</h2><ul>{items}</ul>"
+        return html.rstrip() + f"<h2>{heading}</h2><ul>{items}</ul>"
 
     def _checks(self, *, title: str, html: str, text: str, metadata: dict, links: list[dict], image_alt: str) -> list[dict]:
         return [
@@ -94,5 +113,19 @@ class GrowthSeoGeoService:
         return " ".join(words[:4]) or title[:60]
 
     def _slugify(self, value: str) -> str:
-        cleaned = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+        normalized = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+        cleaned = re.sub(r"[^a-z0-9]+", "-", normalized.lower()).strip("-")
         return cleaned[:90].strip("-")
+
+    def _canonical_url(self, *, channel: str, locale: str, slug: str) -> str:
+        if channel == "mapsi_site":
+            return f"https://mapsi.fr/fr/actualites/{slug}"
+        prefix = {"fr-FR": "/ressources", "en-US": "/en/resources", "es-ES": "/es/recursos"}.get(locale, "/ressources")
+        return f"https://oling.fr{prefix}/{slug}"
+
+    def _localized_image_alt(self, title: str, locale: str) -> str:
+        if locale == "en-US":
+            return f"Editorial illustration for {title}"
+        if locale == "es-ES":
+            return f"Ilustracion editorial para {title}"
+        return f"Illustration editoriale pour {title}"

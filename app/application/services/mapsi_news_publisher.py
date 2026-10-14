@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from datetime import datetime
 from typing import Any
 
@@ -305,11 +306,12 @@ class MapsiNewsPublisher:
             "external_id": asset.id,
             "title": asset.title,
             "slug": self._slugify(asset.title),
+            "locale": "fr",
             "excerpt": excerpt,
             "content_html": content_html,
             "meta_title": asset.title,
             "meta_description": excerpt,
-            "canonical_url": "",
+            "canonical_url": f"{self.settings.mapsi_site_public_base_url.rstrip('/')}/fr/actualites/{self._slugify(asset.title)}",
             "categories": ["growth"],
             "tags": ["mapsi", "growth"],
             "publication_date": (asset.scheduled_at or utcnow()).isoformat(),
@@ -318,7 +320,8 @@ class MapsiNewsPublisher:
         }
 
     def _slugify(self, value: str) -> str:
-        slug = re.sub(r"[^a-z0-9]+", "-", value.lower())
+        normalized = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+        slug = re.sub(r"[^a-z0-9]+", "-", normalized.lower())
         slug = re.sub(r"-{2,}", "-", slug).strip("-")
         return slug or "actualite-mapsi"
 

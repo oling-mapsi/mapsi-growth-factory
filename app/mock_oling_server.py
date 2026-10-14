@@ -27,6 +27,9 @@ def _status_payload(article: dict, http_code: int = 200) -> dict:
     return {
         "http_code": http_code,
         "external_id": article["external_id"],
+        "locale": article.get("locale", "fr"),
+        "content_group_id": article.get("content_group_id", ""),
+        "locales": article.get("locales", []),
         "public_slug": article["slug"],
         "publication_status": article["publication_status"],
         "has_pending_draft": draft is not None and (published is None or draft > published),
@@ -49,9 +52,13 @@ def create_or_update_draft(payload: dict, authorization: str | None = Header(def
     external_id = payload["external_id"]
     article = STATE["articles"].get(external_id)
     if article is None:
+        locale = payload.get("locale", "fr")
         article = {
             "external_id": external_id,
+            "locale": locale,
+            "content_group_id": payload.get("content_group_id", ""),
             "slug": payload["slug"],
+            "locales": [{"locale": locale, "slug": payload["slug"], "status": "draft", "published_at": None}],
             "draft_revision_number": 1,
             "published_revision_number": None,
             "publication_status": "draft",
@@ -62,7 +69,11 @@ def create_or_update_draft(payload: dict, authorization: str | None = Header(def
         }
         STATE["articles"][external_id] = article
         return _status_payload(article, 201)
+    locale = payload.get("locale", article.get("locale", "fr"))
     article["slug"] = payload["slug"]
+    article["locale"] = locale
+    article["content_group_id"] = payload.get("content_group_id", article.get("content_group_id", ""))
+    article["locales"] = _upsert_locale(article.get("locales", []), locale, payload["slug"], "draft")
     article["draft_revision_number"] = (article.get("draft_revision_number") or 0) + 1
     article["payload"] = payload
     article["publication_status"] = "draft"
@@ -78,7 +89,11 @@ def update_draft(external_id: str, payload: dict, authorization: str | None = He
     article = STATE["articles"].get(external_id)
     if article is None:
         raise HTTPException(status_code=404, detail="unknown external_id")
+    locale = payload.get("locale", article.get("locale", "fr"))
     article["slug"] = payload["slug"]
+    article["locale"] = locale
+    article["content_group_id"] = payload.get("content_group_id", article.get("content_group_id", ""))
+    article["locales"] = _upsert_locale(article.get("locales", []), locale, payload["slug"], "draft")
     article["draft_revision_number"] = (article.get("draft_revision_number") or 0) + 1
     article["payload"] = payload
     article["publication_status"] = "draft"
@@ -113,6 +128,7 @@ def publish(external_id: str, authorization: str | None = Header(default=None)) 
     article["published_revision_number"] = article["draft_revision_number"]
     article["publication_status"] = "published"
     article["published_at"] = datetime.now(UTC).replace(microsecond=0).isoformat()
+    article["locales"] = _upsert_locale(article.get("locales", []), article.get("locale", "fr"), article["slug"], "published", article["published_at"])
     return _status_payload(article, 200)
 
 
@@ -136,6 +152,12 @@ def unpublish(external_id: str, authorization: str | None = Header(default=None)
     article["publication_status"] = "unpublished"
     article["unpublished_at"] = datetime.now(UTC).replace(microsecond=0).isoformat()
     return _status_payload(article, 200)
+
+
+def _upsert_locale(locales: list[dict], locale: str, slug: str, status: str, published_at: str | None = None) -> list[dict]:
+    next_locales = [item for item in locales if item.get("locale") != locale]
+    next_locales.append({"locale": locale, "slug": slug, "status": status, "published_at": published_at})
+    return sorted(next_locales, key=lambda item: str(item.get("locale", "")))
 
 
 @app.post("/api/growth/news/{external_id}/restore-previous")
