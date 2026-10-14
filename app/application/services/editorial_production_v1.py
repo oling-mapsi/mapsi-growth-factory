@@ -408,6 +408,10 @@ class EditorialAssetMutationService:
         context_payload["desired_title"] = desired_title
         context_payload["length_directive"] = length_directive
         context_payload["angle_directive"] = angle_directive
+        if not context_payload.get("publication_channel"):
+            publication_channel = {"mapsi_site": "mapsi_site", "oling_site": "oling_site", "oling": "oling_site"}.get(asset.channel)
+            if publication_channel:
+                context_payload["publication_channel"] = publication_channel
         context = EditorialGenerationContext.model_validate(context_payload)
         result = self.editorial_service.generate_from_context(context=context, allow_failed_quality=True)
         asset.update_draft(

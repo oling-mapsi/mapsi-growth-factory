@@ -29,8 +29,16 @@ def test_audit_log_is_append_only_on_postgres() -> None:
         connection.execute(
             text(
                 """
-                INSERT INTO campaign_runs (id, name, objective, status, created_at, updated_at)
-                VALUES ('c1', 'Campaign', 'Objective', 'DRAFT', now(), now())
+                INSERT INTO campaign_runs (
+                    id, name, objective, status, created_at, updated_at,
+                    campaign_type, weekly_pack_id, week_reference, week_year, week_number, pilot_mode,
+                    theme, workflow_kind, selected_channels
+                )
+                VALUES (
+                    'c1', 'Campaign', 'Objective', 'DRAFT', now(), now(),
+                    'OLING', '', '', 0, 0, false,
+                    'Theme', 'SIMPLE', '[]'::json
+                )
                 """
             )
         )

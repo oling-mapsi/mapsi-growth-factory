@@ -65,22 +65,31 @@ def _article_payload(*, topic: str, article_type: str, slug: str, title: str, so
     }
 
 
+def _draft_and_rewrite(*, topic: str, article_type: str, slug: str, draft_title: str, rewrite_title: str, source_ids: list[str]) -> list[dict]:
+    return [
+        _article_payload(topic=topic, article_type=article_type, slug=f"{slug}-draft", title=draft_title, source_ids=source_ids),
+        _article_payload(topic=topic, article_type=article_type, slug=slug, title=rewrite_title, source_ids=source_ids),
+    ]
+
+
 def test_mapsi_market_production_builder_creates_two_distinct_articles(session) -> None:
     _seed_recent_product_change(session)
     backend = FakeStructuredAgentBackend(
         [
-            _article_payload(
+            *_draft_and_rewrite(
                 topic="Export des indicateurs du tableau utilisateur",
                 article_type="MAPSI_PRODUCT",
                 slug="export-indicateurs-mapsi",
-                title="Export des indicateurs du tableau utilisateur dans MAPSI",
+                draft_title="Brouillon export des indicateurs MAPSI",
+                rewrite_title="Export des indicateurs du tableau utilisateur dans MAPSI",
                 source_ids=["knowledge:mapsi:feature:dashboard-indicators-export", "product_change:pc-1"],
             ),
-            _article_payload(
+            *_draft_and_rewrite(
                 topic="Export des indicateurs du tableau utilisateur",
                 article_type="MAPSI_CONSULTING",
                 slug="export-indicateurs-conseil",
-                title="Mieux exploiter l'export des indicateurs du tableau utilisateur",
+                draft_title="Brouillon conseil export des indicateurs",
+                rewrite_title="Mieux exploiter l'export des indicateurs du tableau utilisateur",
                 source_ids=["knowledge:mapsi:feature:dashboard-indicators-export", "product_change:pc-1"],
             ),
         ],
@@ -101,16 +110,28 @@ def test_mapsi_market_production_builder_creates_two_distinct_articles(session) 
     assert {item.asset_type for item in result.assets} == {"mapsi_news_article", "oling_news_article"}
     assert all(item.status is AssetStatus.READY_FOR_REVIEW for item in result.assets)
     assert result.assets[0].title != result.assets[1].title
+    assert [call["agent_name"] for call in backend.calls] == [
+        "EditorialArticleGenerator",
+        "EditorialArticleRewriteAgent",
+        "EditorialArticleGenerator",
+        "EditorialArticleRewriteAgent",
+    ]
+    assert {call["input"].get("publication_channel") for call in backend.calls if call["agent_name"] == "EditorialArticleGenerator"} == {"mapsi_site", "oling_site"}
+    assert {item.title for item in result.assets} == {
+        "Export des indicateurs du tableau utilisateur dans MAPSI",
+        "Mieux exploiter l'export des indicateurs du tableau utilisateur",
+    }
 
 
 def test_oling_practice_production_builder_selects_enabled_practice(session) -> None:
     backend = FakeStructuredAgentBackend(
         [
-            _article_payload(
+            *_draft_and_rewrite(
                 topic="Facturation electronique",
                 article_type="OLING_PRACTICE",
                 slug="facturation-electronique-oling",
-                title="Facturation electronique : cadrer sans promettre trop vite",
+                draft_title="Brouillon facturation electronique",
+                rewrite_title="Facturation electronique : cadrer sans promettre trop vite",
                 source_ids=["knowledge:oling:practice:facturation-electronique", "knowledge:oling:profile"],
             )
         ],
@@ -130,6 +151,9 @@ def test_oling_practice_production_builder_selects_enabled_practice(session) -> 
     assert len(result.assets) == 1
     assert result.assets[0].asset_type == "oling_news_article"
     assert result.assets[0].status is AssetStatus.READY_FOR_REVIEW
+    assert [call["agent_name"] for call in backend.calls] == ["EditorialArticleGenerator", "EditorialArticleRewriteAgent"]
+    assert backend.calls[0]["input"]["publication_channel"] == "oling_site"
+    assert result.assets[0].title == "Facturation electronique : cadrer sans promettre trop vite"
 
 
 def test_editorial_asset_mutation_service_snapshots_and_rewrites(session) -> None:
@@ -199,11 +223,12 @@ def test_editorial_asset_mutation_service_snapshots_and_rewrites(session) -> Non
     campaign = campaigns.add(campaign)
     backend = FakeStructuredAgentBackend(
         [
-            _article_payload(
+            *_draft_and_rewrite(
                 topic="Export des indicateurs du tableau utilisateur",
                 article_type="MAPSI_PRODUCT",
                 slug="export-indicateurs-rewrite",
-                title="Titre reecrit",
+                draft_title="Titre brouillon",
+                rewrite_title="Titre reecrit",
                 source_ids=["knowledge:mapsi:feature:dashboard-indicators-export"],
             )
         ],
@@ -223,5 +248,7 @@ def test_editorial_asset_mutation_service_snapshots_and_rewrites(session) -> Non
     snapshots = AssetRevisionRepository(session).list_for_asset(asset.id)
     assert rewritten.content_version == 2
     assert rewritten.title == "Titre reecrit"
+    assert [call["agent_name"] for call in backend.calls] == ["EditorialArticleGenerator", "EditorialArticleRewriteAgent"]
+    assert backend.calls[0]["input"]["publication_channel"] == "mapsi_site"
     assert len(snapshots) == 1
     assert snapshots[0].title == "Titre initial"

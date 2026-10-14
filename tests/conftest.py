@@ -9,7 +9,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-TEST_DATABASE_URL = os.environ.get("GROWTH_TEST_DATABASE_URL", "sqlite+pysqlite:///:memory:")
+TEST_DATABASE_URL = os.environ.get("GROWTH_TEST_DATABASE_URL") or os.environ.get("TEST_DATABASE_URL", "sqlite+pysqlite:///:memory:")
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["MAPSI_API_KEY"] = "test-key"
 os.environ["REDIS_URL"] = "redis://localhost:6379/15"
@@ -95,7 +95,10 @@ TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=Fals
 
 
 @pytest.fixture(autouse=True)
-def reset_database() -> Generator[None, None, None]:
+def reset_database(request: pytest.FixtureRequest) -> Generator[None, None, None]:
+    if request.node.get_closest_marker("postgres"):
+        yield
+        return
     Base.metadata.create_all(bind=engine)
     yield
     Base.metadata.drop_all(bind=engine)

@@ -266,7 +266,7 @@ def test_simple_campaign_uses_distinct_tone_for_users_and_oling(client) -> None:
     assert oling_article["content_text"] != users_article["content_text"]
 
 
-def test_openapi_prioritizes_simple_studio_and_hides_legacy_admin_workflows(client) -> None:
+def test_openapi_exposes_simple_studio_and_legacy_admin_workflows(client) -> None:
     response = client.get("/openapi.json")
     assert response.status_code == 200
     paths = response.json()["paths"]
@@ -277,14 +277,37 @@ def test_openapi_prioritizes_simple_studio_and_hides_legacy_admin_workflows(clie
     assert "/studio-simple/campaigns/{campaign_id}/assets/{asset_id}/approve" in paths
     assert "/studio-simple/campaigns/{campaign_id}/archive" in paths
     assert "/studio-simple/campaigns/{campaign_id}/unpublish" in paths
-    assert "/api/admin/v1/campaigns" not in paths
-    assert "/api/admin/v1/campaigns/{campaignId}" not in paths
-    assert "/api/admin/v1/weekly-packs" not in paths
-    assert "/api/admin/v1/source-packs" not in paths
-    assert "/api/admin/v1/channels" not in paths
-    assert "/api/admin/v1/assets/{assetId}/publish" not in paths
-    assert "/campaigns" not in paths
-    assert "/ops/campaigns/{campaign_id}/request-approval" not in paths
+    assert "/api/admin/v1/campaigns" in paths
+    assert "/api/admin/v1/campaigns/{campaignId}" in paths
+    assert "/api/admin/v1/weekly-packs" in paths
+    assert "/api/admin/v1/source-packs/{id}" in paths
+    assert "/api/admin/v1/channels" in paths
+    assert "/api/admin/v1/assets/{assetId}/publish" in paths
+    assert "/campaigns" in paths
+    assert "/ops/campaigns/{campaign_id}/request-approval" in paths
+
+    assert client.get("/studio-simple/campaigns").status_code == 401
+    assert client.get("/api/admin/v1/campaigns").status_code == 401
+    simple_response = client.get(
+        "/studio-simple/campaigns",
+        headers=auth_headers(roles=["ROLE_GROWTH_VIEWER"], jti=str(uuid4())),
+    )
+    legacy_response = client.get(
+        "/api/admin/v1/campaigns",
+        headers=auth_headers(roles=["ROLE_GROWTH_VIEWER"], jti=str(uuid4())),
+    )
+    audit_forbidden = client.get(
+        "/api/admin/v1/audit-events",
+        headers=auth_headers(roles=["ROLE_GROWTH_VIEWER"], jti=str(uuid4())),
+    )
+    audit_allowed = client.get(
+        "/api/admin/v1/audit-events",
+        headers=auth_headers(roles=["ROLE_GROWTH_AUDIT"], jti=str(uuid4())),
+    )
+    assert simple_response.status_code == 200
+    assert legacy_response.status_code == 200
+    assert audit_forbidden.status_code == 403
+    assert audit_allowed.status_code == 200
 
 
 def test_simple_campaign_can_be_deleted_before_publication(client) -> None:

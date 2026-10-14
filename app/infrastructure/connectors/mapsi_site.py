@@ -177,12 +177,10 @@ class MapsiSiteConnector:
                     if attempt < attempts:
                         time.sleep(self.config.retry_backoff_seconds * attempt)
                         continue
-                response.raise_for_status()
+                if response.status_code >= 400:
+                    raise self._raise_http_error(response, correlation_id)
                 self._record_success()
                 return response
-            except httpx.HTTPStatusError as exc:
-                last_error = exc
-                raise self._raise_http_error(exc.response, correlation_id) from exc
             except httpx.TimeoutException as exc:
                 last_error = exc
                 self._record_failure(correlation_id, None)
