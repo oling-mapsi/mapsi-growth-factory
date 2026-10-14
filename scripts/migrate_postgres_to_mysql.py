@@ -62,7 +62,9 @@ def main() -> int:
             update_columns = [column.name for column in table.columns if column.name not in primary_keys]
             for batch in _chunks(rows, 200):
                 statement = mysql_insert(table).values(batch)
-                if update_columns:
+                if table.name == "audit_logs":
+                    statement = statement.prefix_with("IGNORE")
+                elif update_columns:
                     statement = statement.on_duplicate_key_update(
                         {name: statement.inserted[name] for name in update_columns}
                     )
