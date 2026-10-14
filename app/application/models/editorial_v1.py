@@ -91,6 +91,11 @@ class PublishedArticleContext(StrictModel):
     created_at: datetime
 
 
+class AuthorizedClientReference(StrictModel):
+    name: StrictStr
+    source_ids: list[StrictStr]
+
+
 class EditorialGenerationContext(StrictModel):
     topic: StrictStr
     article_type: Literal["MAPSI_PRODUCT", "MAPSI_CONSULTING", "OLING_PRACTICE"]
@@ -110,6 +115,7 @@ class EditorialGenerationContext(StrictModel):
     oling_practice: OlingPracticeContext | None = None
     published_topic_history: list[PublishedArticleContext] = Field(default_factory=list)
     sources: list[EditorialSourceDescriptor]
+    authorized_client_references: list[AuthorizedClientReference] = Field(default_factory=list)
     context_digest: StrictStr = ""
     rewrite_instruction: StrictStr = ""
     desired_title: StrictStr = ""

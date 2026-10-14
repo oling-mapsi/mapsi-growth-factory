@@ -56,7 +56,6 @@ EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECAS
 TOKEN_RE = re.compile(r"\b(?:sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|[A-Za-z0-9_-]{24,}\.[A-Za-z0-9._-]{8,})\b")
 SCRIPT_RE = re.compile(r"<\s*(script|iframe)\b", re.IGNORECASE)
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-CLIENT_RE = re.compile(r"\b(?:acme|client (?!(?:teams|stakeholders|organizations|requirements|needs|business|processes|data|roles)\b)[a-z0-9_-]+|chez (?!oling\b)[a-z0-9_-]+)\b", re.IGNORECASE)
 GENERIC_PHRASE_RE = re.compile(
     r"(dans un monde en constante evolution|il est essentiel de|solution innovante|revolutionnaire|levier incontournable)",
     re.IGNORECASE,
@@ -486,8 +485,9 @@ class EditorialQualityValidator:
             issues.append(self._issue("missing_sources", "At least one source is required."))
         if EMAIL_RE.search(article.model_dump_json()) or TOKEN_RE.search(article.model_dump_json()):
             issues.append(self._issue("secret_or_email_detected", "Emails or secrets are forbidden."))
-        if CLIENT_RE.search(article.model_dump_json()):
-            issues.append(self._issue("unauthorized_client_reference", "Client references are forbidden in generated content."))
+        from app.application.services.editorial_client_references import unauthorized_client_references
+        for location, exact, offset in unauthorized_client_references(article, context):
+            issues.append(self._issue("unauthorized_client_reference", f'Unauthorized client reference "{exact}" at {location}, offset {offset}.'))
         if GENERIC_PHRASE_RE.search(article.body_text):
             issues.append(self._issue("generic_editorial_phrasing", "Generated content uses banned generic editorial phrasing."))
         if any(not claim.verified for claim in article.claims):

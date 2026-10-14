@@ -11,6 +11,87 @@ from app.infrastructure.agents.fake_backend import FakeStructuredAgentBackend
 from app.infrastructure.db.models import ContentAssetModel, EditorialThemeHistoryModel, ProductChangeModel
 
 
+def _quality_pair(session, text):
+    from app.application.models.editorial_v1 import EditorialArticle
+    context = build_editorial_generation_service(session, force_mode="simulated")._build_oling_context(practice_id="erp")
+    payload = _article_payload(topic="ERP", article_type="OLING_PRACTICE", source_ids=[context.sources[0].source_id], body_text=("Un cadrage rigoureux facilite les decisions et la preparation du projet. " * 12) + text)
+    return EditorialArticle.model_validate(payload), context
+
+
+@pytest.mark.parametrize("text", [
+    "Un client peut rencontrer des difficultes.", "Les besoins du client.",
+    "Le systeme d'information du client.", "Aucun cas client de fusion.",
+    "Chez un client.", "Chez nos clients.", "Chez OLING.",
+    "Customer requirements.", "Client needs.", "Client teams clarify requirements.",
+    "A client can review its processes.", "Las necesidades del cliente.",
+    "El cliente puede revisar sus necesidades.", "Los requisitos de nuestros clientes.",
+])
+def test_client_detector_allows_ordinary_multilingual_business_prose(session, text):
+    from app.application.services.editorial_engine_v1 import EditorialQualityValidator
+    article, context = _quality_pair(session, text)
+    assert EditorialQualityValidator().validate(article, context).passed
+
+
+@pytest.mark.parametrize("field", ["title", "excerpt", "body_text", "body_html", "meta_title", "meta_description", "claims", "warnings"])
+@pytest.mark.parametrize("text", ["Chez Acme, nous avons deploye un ERP.", "Client Globex.", "Testimonial from Umbrella.", "Cliente Contoso.", "Client Fusion."])
+def test_named_clients_are_blocked_in_editorial_fields_with_exact_location(session, field, text):
+    from app.application.services.editorial_engine_v1 import EditorialQualityValidator
+    article, context = _quality_pair(session, "")
+    if field == "claims":
+        article.claims[0].text = text
+    elif field == "warnings":
+        article.warnings = [text]
+    else:
+        setattr(article, field, "<p>"+text+"</p>" if field == "body_html" else text)
+    issues = [issue for issue in EditorialQualityValidator().validate(article, context).issues if issue.code == "unauthorized_client_reference"]
+    assert issues and any(field in issue.message and '"' in issue.message and "offset" in issue.message for issue in issues)
+
+
+def test_client_detector_ignores_source_identifiers_and_html_technical_attributes(session):
+    from app.application.models.editorial_v1 import EditorialSourceDescriptor
+    from app.application.services.editorial_engine_v1 import EditorialQualityValidator
+    article, context = _quality_pair(session, "")
+    source_id = "source:client Acme"
+    context.sources = [EditorialSourceDescriptor(source_id=source_id,source_type="knowledge_file",label="Client Acme",reference="knowledge/client-acme.md",summary="Technical source record")]
+    article.source_ids = [source_id]
+    article.claims[0].source_ids = [source_id]
+    article.body_html = '<div data-source="client Acme">'+article.body_html+'</div>'
+    assert EditorialQualityValidator().validate(article, context).passed
+
+
+@pytest.mark.parametrize("documented", [True, False])
+def test_named_reference_needs_explicit_authorization_and_verified_matching_sources(session, documented):
+    from app.application.models.editorial_v1 import AuthorizedClientReference, EditorialSourceDescriptor
+    from app.application.services.editorial_engine_v1 import EditorialQualityValidator
+    article, context = _quality_pair(session, "Chez Globex, nous avons accompagne le cadrage.")
+    source_id = "knowledge:authorized-reference:globex"
+    context.sources.append(EditorialSourceDescriptor(source_id=source_id,source_type="knowledge_file",label="Autorisation Globex",reference="knowledge/authorized-references/globex.md",summary="Autorisation de citer Globex et son projet de cadrage."))
+    article.source_ids.append(source_id)
+    article.claims[0].source_ids.append(source_id)
+    ids = [source_id] if documented else ["unknown-authorization"]
+    context.authorized_client_references = [AuthorizedClientReference(name="Globex",source_ids=ids)]
+    article.claims[0].text = "Le cadrage chez Globex est documente."
+    issues = EditorialQualityValidator().validate(article, context).issues
+    assert any(issue.code == "unauthorized_client_reference" for issue in issues) is not documented
+
+
+def test_client_reference_is_not_authorized_by_unrelated_knowledge_source(session):
+    from app.application.models.editorial_v1 import AuthorizedClientReference
+    from app.application.services.editorial_engine_v1 import EditorialQualityValidator
+    article, context = _quality_pair(session, "Client Globex.")
+    context.authorized_client_references = [AuthorizedClientReference(name="Globex",source_ids=article.source_ids)]
+    article.claims[0].text = "Globex est un client."
+    assert not EditorialQualityValidator().validate(article, context).passed
+
+
+def test_fictional_testimonial_is_not_authorized_by_generated_claim_flags(session):
+    from app.application.services.editorial_engine_v1 import EditorialQualityValidator
+    article, context = _quality_pair(session, "Chez Acme, nous avons deploye un ERP.")
+    article.claims[0].text = "Acme recommande notre realisation."
+    article.claims[0].verified = True
+    assert not EditorialQualityValidator().validate(article, context).passed
+
+
 class RewriteFailingBackend(FakeStructuredAgentBackend):
     def run_structured(self, **kwargs):
         if kwargs["agent_name"] == "EditorialArticleRewriteAgent":

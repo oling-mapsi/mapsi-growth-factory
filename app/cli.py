@@ -18,6 +18,12 @@ def build_parser() -> argparse.ArgumentParser:
     mapsi_diagnose.add_argument("--skip-preview-probe", action="store_true")
 
     subparsers.add_parser("knowledge:validate")
+    quality = subparsers.add_parser("editorial-quality:reevaluate")
+    quality.add_argument("--asset-id", required=True)
+    quality.add_argument("--expected-version", type=int, required=True)
+    quality.add_argument("--expected-hash", required=True)
+    quality.add_argument("--actor", required=True)
+    quality.add_argument("--apply", action="store_true")
     return parser
 
 
@@ -91,6 +97,13 @@ def _mapsi_site_diagnose(*, skip_preview_probe: bool = False) -> dict:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+
+    if args.command == "editorial-quality:reevaluate":
+        from app.application.services.editorial_quality_reevaluation import EditorialQualityReevaluationService
+        with SessionLocal() as session:
+            result = EditorialQualityReevaluationService(session).reevaluate(args.asset_id, expected_version=args.expected_version, expected_hash=args.expected_hash, actor=args.actor, apply=args.apply)
+            print(json.dumps(result, indent=2, default=str))
+        return 0
 
     if args.command == "mapsi-site:diagnose":
         print(json.dumps(_mapsi_site_diagnose(skip_preview_probe=args.skip_preview_probe), indent=2, sort_keys=True, default=str))
