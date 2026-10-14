@@ -480,6 +480,9 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
             )
         elif publication.publication_status == "FAILED":
             asset.mark_failed(publication.last_error or "Oling publication failed.")
+        elif publication.publication_status in {"DRAFT", "PREVIEW_READY"} and asset.status is AssetStatus.FAILED:
+            asset.status = AssetStatus.READY_FOR_REVIEW
+            asset.last_error = ""
         asset.results = {
             **asset.results,
             "publication_mode_requested": publication.publication_mode_requested,

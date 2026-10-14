@@ -405,6 +405,9 @@ class MapsiNewsPublisher:
             asset.mark_published(external_id=publication.external_id, external_url=publication.public_url, published_at=publication.published_at)
         elif publication.publication_status == "FAILED":
             asset.mark_failed(publication.last_error or "Mapsi Site publication failed.")
+        elif publication.publication_status in {"DRAFT", "PREVIEW_READY"} and asset.status is AssetStatus.FAILED:
+            asset.status = AssetStatus.READY_FOR_REVIEW
+            asset.last_error = ""
         asset.results = {
             **asset.results,
             "publication_mode_requested": publication.publication_mode_requested,

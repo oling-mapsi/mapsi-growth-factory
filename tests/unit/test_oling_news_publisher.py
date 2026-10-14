@@ -121,6 +121,19 @@ def test_oling_preview_payload_carries_locale_and_article_canonical(session) -> 
     assert payload["canonical_url"] == "https://www.oling.fr/es/recursos/articulo-oling-con-acentos"
 
 
+def test_oling_preview_restores_asset_after_transient_connector_failure(session) -> None:
+    get_settings.cache_clear()
+    publisher = build_publisher(session)
+    campaign = seed_campaign(session)
+    asset = campaign.content_assets[0]
+    asset.mark_failed("previous connector error")
+
+    publisher.create_preview(campaign, asset)
+
+    assert asset.status is AssetStatus.READY_FOR_REVIEW
+    assert asset.last_error == ""
+
+
 def test_oling_publish_is_idempotent_for_same_asset_hash(session) -> None:
     get_settings.cache_clear()
     publisher = build_publisher(session)
