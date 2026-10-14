@@ -191,6 +191,43 @@ def test_oling_multilingual_assets_share_editorial_article(session) -> None:
     assert {item["locale"] for item in article["locales"]} == {"fr", "en", "es"}
 
 
+def test_oling_publish_targets_only_requested_locale(session) -> None:
+    get_settings.cache_clear()
+    publisher = build_publisher(session)
+    campaign = seed_campaign(session, title="Article français", locale="fr-FR")
+    for locale, title, body in [
+        ("en-US", "English article", "English content"),
+        ("es-ES", "Artículo español", "Contenido español"),
+    ]:
+        item = ContentAsset(
+            campaign_run_id=campaign.id,
+            asset_type="oling_news_article",
+            channel="oling",
+            locale=locale,
+            title=title,
+            content_html=f"<p>{body}</p>",
+            content_text=body,
+            excerpt=body,
+            audience_segment_id=campaign.audience_segments[0].id,
+            status=AssetStatus.APPROVED,
+        )
+        item.ensure_content_hash()
+        item.approved_content_hash = item.content_hash
+        item.approved_by = "approver"
+        item.approved_at = datetime.now(UTC)
+        campaign.content_assets.append(item)
+    campaign = SqlAlchemyCampaignRepository(session).save(campaign)
+
+    for item in campaign.content_assets:
+        publisher.create_preview(campaign, item)
+    english = next(item for item in campaign.content_assets if item.locale == "en-US")
+
+    publisher.publish(campaign, english)
+
+    locales = {item["locale"]: item["status"] for item in STATE["articles"][campaign.id]["locales"]}
+    assert locales == {"en": "published", "es": "draft", "fr": "draft"}
+
+
 def test_oling_publish_reuses_existing_result_for_same_hash(session) -> None:
     get_settings.cache_clear()
     publisher = build_publisher(session)
@@ -339,11 +376,16 @@ def test_oling_publish_timeout_after_remote_success_is_reconciled(session) -> No
     campaign = seed_campaign(session)
     asset = campaign.content_assets[0]
 
-    def timeout_after_remote_publish(external_id: str, *, correlation_id: str):
+    def timeout_after_remote_publish(external_id: str, *, correlation_id: str, locale: str = "fr"):
         article = STATE["articles"][external_id]
         article["published_revision_number"] = article["draft_revision_number"]
         article["publication_status"] = "published"
         article["published_at"] = datetime.now(UTC).replace(microsecond=0).isoformat()
+        for item in article["locales"]:
+            if item["locale"] == locale:
+                item["status"] = "published"
+                item["published_at"] = article["published_at"]
+                item["published_revision_number"] = item["draft_revision_number"]
         raise ExternalConnectorError("timeout")
 
     publisher.connector.publish = timeout_after_remote_publish

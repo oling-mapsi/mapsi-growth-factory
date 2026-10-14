@@ -75,20 +75,20 @@ class OlingConnector:
     def update_draft(self, external_id: str, payload: dict[str, Any], *, correlation_id: str) -> dict[str, Any]:
         return self._request("PATCH", f"/api/growth/news/{external_id}", json=payload, correlation_id=correlation_id).json()
 
-    def get_preview_url(self, external_id: str, *, correlation_id: str) -> dict[str, Any]:
-        return self._request("POST", f"/api/growth/news/{external_id}/preview-url", correlation_id=correlation_id).json()
+    def get_preview_url(self, external_id: str, *, locale: str = "fr", correlation_id: str) -> dict[str, Any]:
+        return self._request("POST", f"/api/growth/news/{external_id}/preview-url", params={"locale": locale}, correlation_id=correlation_id).json()
 
-    def publish(self, external_id: str, *, correlation_id: str) -> dict[str, Any]:
-        return self._request("POST", f"/api/growth/news/{external_id}/publish", correlation_id=correlation_id).json()
+    def publish(self, external_id: str, *, locale: str = "fr", correlation_id: str) -> dict[str, Any]:
+        return self._request("POST", f"/api/growth/news/{external_id}/publish", params={"locale": locale}, correlation_id=correlation_id).json()
 
-    def get_status(self, external_id: str, *, correlation_id: str) -> dict[str, Any]:
-        return self._request("GET", f"/api/growth/news/{external_id}", correlation_id=correlation_id).json()
+    def get_status(self, external_id: str, *, locale: str = "fr", correlation_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/api/growth/news/{external_id}", params={"locale": locale}, correlation_id=correlation_id).json()
 
-    def unpublish(self, external_id: str, *, correlation_id: str) -> dict[str, Any]:
-        return self._request("POST", f"/api/growth/news/{external_id}/unpublish", correlation_id=correlation_id).json()
+    def unpublish(self, external_id: str, *, locale: str = "fr", correlation_id: str) -> dict[str, Any]:
+        return self._request("POST", f"/api/growth/news/{external_id}/unpublish", params={"locale": locale}, correlation_id=correlation_id).json()
 
-    def restore_previous(self, external_id: str, *, correlation_id: str) -> dict[str, Any]:
-        return self._request("POST", f"/api/growth/news/{external_id}/restore-previous", correlation_id=correlation_id).json()
+    def restore_previous(self, external_id: str, *, locale: str = "fr", correlation_id: str) -> dict[str, Any]:
+        return self._request("POST", f"/api/growth/news/{external_id}/restore-previous", params={"locale": locale}, correlation_id=correlation_id).json()
 
     def _request(self, method: str, path: str, *, correlation_id: str, **kwargs) -> httpx.Response:
         self._assert_circuit_closed(correlation_id)
