@@ -266,6 +266,49 @@ def test_simple_campaign_uses_distinct_tone_for_users_and_oling(client) -> None:
     assert oling_article["content_text"] != users_article["content_text"]
 
 
+def test_simple_campaign_allows_every_channel_for_every_type(client) -> None:
+    for campaign_type in ["MAPSI_USERS", "MAPSI_MARKETING", "OLING"]:
+        response = client.post(
+            "/studio-simple/campaigns",
+            headers=auth_headers(roles=["ROLE_GROWTH_REVIEW"], jti=str(uuid4())),
+            json={
+                "name": f"{campaign_type} tous canaux",
+                "campaign_type": campaign_type,
+                "theme": "Compatibilite des canaux",
+                "selected_channels": ["mapsi_site", "oling_site", "linkedin_manual", "email_manual"],
+            },
+        )
+        assert response.status_code == 201
+        assert response.json()["selected_channels"] == ["mapsi_site", "oling_site", "linkedin_manual", "email_manual"]
+
+
+def test_simple_campaign_generates_manual_only_variants_without_public_article_asset(client) -> None:
+    for channels in [["linkedin_manual"], ["email_manual"], ["linkedin_manual", "email_manual"]]:
+        create_response = client.post(
+            "/studio-simple/campaigns",
+            headers=auth_headers(roles=["ROLE_GROWTH_REVIEW"], jti=str(uuid4())),
+            json={
+                "name": "Manuel uniquement",
+                "campaign_type": "MAPSI_USERS",
+                "theme": "Informer sans publier sur site",
+                "selected_channels": channels,
+            },
+        )
+        assert create_response.status_code == 201
+        campaign_id = create_response.json()["id"]
+
+        generate_response = client.post(
+            f"/studio-simple/campaigns/{campaign_id}/generate",
+            headers=auth_headers(roles=["ROLE_GROWTH_REVIEW"], jti=str(uuid4())),
+        )
+        assert generate_response.status_code == 200
+        assets = generate_response.json()["content_assets"]
+        assert {asset["channel"] for asset in assets} == set(channels)
+        assert "mapsi_site" not in {asset["channel"] for asset in assets}
+        assert "oling_site" not in {asset["channel"] for asset in assets}
+        assert all(asset["content_text"] for asset in assets)
+
+
 def test_openapi_exposes_simple_studio_and_legacy_admin_workflows(client) -> None:
     response = client.get("/openapi.json")
     assert response.status_code == 200
@@ -394,7 +437,7 @@ def test_simple_campaign_archive_and_unpublish_are_explicit(client) -> None:
     assert archive_response.status_code == 200
     assert archive_response.json()["status"] == "ARCHIVED"
     list_response = client.get("/studio-simple/campaigns", headers=auth_headers(roles=["ROLE_GROWTH_VIEWER"], jti=str(uuid4())))
-    assert all(item["id"] != campaign_id for item in list_response.json())
+    assert any(item["id"] == campaign_id and item["status"] == "ARCHIVED" for item in list_response.json())
 
 
 def test_simple_campaign_sanitizes_edited_html(client) -> None:

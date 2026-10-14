@@ -34,10 +34,11 @@ from app.knowledge.models import MapsiFeature, OlingPractice
 
 SIMPLE_WORKFLOW_KIND = "SIMPLE"
 SIMPLE_CAMPAIGN_TYPES = {"MAPSI_USERS", "MAPSI_MARKETING", "OLING"}
+ALL_SIMPLE_CHANNELS = {"mapsi_site", "oling_site", "linkedin_manual", "email_manual"}
 SIMPLE_CHANNEL_RULES: dict[str, set[str]] = {
-    "MAPSI_USERS": {"mapsi_site", "linkedin_manual", "email_manual"},
-    "MAPSI_MARKETING": {"mapsi_site", "oling_site", "linkedin_manual", "email_manual"},
-    "OLING": {"oling_site", "linkedin_manual", "email_manual"},
+    "MAPSI_USERS": ALL_SIMPLE_CHANNELS,
+    "MAPSI_MARKETING": ALL_SIMPLE_CHANNELS,
+    "OLING": ALL_SIMPLE_CHANNELS,
 }
 CHANNEL_TO_INTERNAL = {
     "mapsi_site": "mapsi_site",
@@ -194,7 +195,7 @@ class SimpleCampaignService:
         return [
             campaign
             for campaign in self.repository.list()
-            if campaign.workflow_kind == SIMPLE_WORKFLOW_KIND and campaign.status not in {CampaignStatus.ARCHIVED, CampaignStatus.DELETED}
+            if campaign.workflow_kind == SIMPLE_WORKFLOW_KIND and campaign.status is not CampaignStatus.DELETED
         ]
 
     def get_campaign(self, campaign_id: str) -> CampaignRun:
@@ -261,7 +262,18 @@ class SimpleCampaignService:
 
         primary_result = results.get("mapsi_site") or results.get("oling_site")
         if primary_result is None:
-            raise InvalidStateTransitionError("Simple studio requires at least one article channel before generating manual variants.")
+            if campaign.campaign_type == "OLING":
+                internal_context = self._build_oling_context(campaign)
+                internal_selection = self._oling_selection(campaign)
+            else:
+                internal_context = self._build_mapsi_context(campaign, destination_site="mapsi.fr", article_type="MAPSI_PRODUCT")
+                internal_selection = self._mapsi_selection(campaign)
+            if is_regeneration:
+                internal_context.published_topic_history = []
+            primary_result = self.editorial_service.generate_from_context(
+                context=internal_context,
+                selection=internal_selection,
+            )
 
         evidence = self._collect_editorial_evidence(campaign.id, [result.context for result in [*results.values(), primary_result]])
         assets: list[ContentAsset] = []
