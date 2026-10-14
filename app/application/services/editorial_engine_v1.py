@@ -179,15 +179,21 @@ class OpenAIEditorialGenerator(EditorialGeneratorInterface):
         prompt_version: str,
     ) -> StructuredOutputEnvelope:
         started = time.perf_counter()
-        result = self.provider.run_structured(
-            agent_name=agent_name,
-            prompt=prompt,
-            input_model=input_model,
-            output_type=output_type,
-            model_name=self.model_name,
-            prompt_version=prompt_version,
-            temperature=self.temperature,
-        )
+        try:
+            result = self.provider.run_structured(
+                agent_name=agent_name,
+                prompt=prompt,
+                input_model=input_model,
+                output_type=output_type,
+                model_name=self.model_name,
+                prompt_version=prompt_version,
+                temperature=self.temperature,
+            )
+        except Exception as exc:
+            if _is_openai_quota_error(exc):
+                structured_log("editorial.article.step.quota_exhausted", agent_name=agent_name)
+                raise EditorialGenerationBlockedError("Crédit API OpenAI épuisé — génération suspendue") from exc
+            raise
         duration_ms = max(1, int((time.perf_counter() - started) * 1000))
         cost = _estimate_cost(result.metadata.token_usage)
         return StructuredOutputEnvelope(
@@ -949,6 +955,11 @@ def _estimate_cost(usage: EditorialTokenUsage) -> float:
         + (usage.output_tokens / 1_000_000) * settings.editorial_agent_output_cost_per_1m_tokens,
         6,
     )
+
+
+def _is_openai_quota_error(exc: Exception) -> bool:
+    text = str(exc)
+    return "insufficient_quota" in text or "credit_balance_exhausted" in text or "no credits remaining" in text.lower()
 
 
 def _slugify(value: str) -> str:
