@@ -413,7 +413,8 @@ class EditorialAssetMutationService:
             publication_channel = {"mapsi_site": "mapsi_site", "oling_site": "oling_site", "oling": "oling_site"}.get(asset.channel)
             if publication_channel:
                 context_payload["publication_channel"] = publication_channel
-        context = EditorialGenerationContext.model_validate(context_payload)
+        # Persisted contexts use JSON ISO dates; strict Python validation rejects them.
+        context = EditorialGenerationContext.model_validate_json(json.dumps(context_payload))
         draft = None
         if targeted_repair:
             from app.application.models.editorial_v1 import EditorialArticle

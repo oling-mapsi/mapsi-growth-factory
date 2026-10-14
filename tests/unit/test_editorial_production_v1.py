@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from app.application.services.editorial_engine_v1 import OpenAIEditorialGenerator, build_editorial_generation_service
 from app.application.services.editorial_production_v1 import EditorialAssetMutationService, MapsiMarketProductionBuilder, OlingPracticeProductionBuilder
 from app.domain.entities import AudienceSegment, CampaignRun, ContentAsset
@@ -158,7 +160,8 @@ def test_oling_practice_production_builder_selects_enabled_practice(session) -> 
     assert result.assets[0].title == "Facturation electronique : cadrer sans promettre trop vite"
 
 
-def test_editorial_asset_mutation_service_snapshots_and_rewrites(session) -> None:
+@pytest.mark.parametrize("targeted_repair", [False, True])
+def test_editorial_asset_mutation_service_snapshots_and_rewrites(session, targeted_repair) -> None:
     campaigns = SqlAlchemyCampaignRepository(session)
     audit = SqlAlchemyAuditLogRepository(session)
     _seed_recent_product_change(session)
@@ -203,7 +206,7 @@ def test_editorial_asset_mutation_service_snapshots_and_rewrites(session) -> Non
                 },
                 "recent_product_changes": [],
                 "oling_practice": None,
-                "published_topic_history": [],
+                "published_topic_history": [{"topic":"Previous topic","objective":"market_visibility","audience_segment_id":"historical","created_at":"2026-10-14T12:31:27"}],
                 "sources": [
                     {
                         "source_id": "knowledge:mapsi:feature:dashboard-indicators-export",
@@ -220,19 +223,22 @@ def test_editorial_asset_mutation_service_snapshots_and_rewrites(session) -> Non
             }
         },
     )
+    asset.results["editorial_article"] = _article_payload(topic="Export des indicateurs du tableau utilisateur", article_type="MAPSI_PRODUCT", slug="initial", title="Titre initial", source_ids=["knowledge:mapsi:feature:dashboard-indicators-export"])
     asset.ensure_content_hash()
     campaign.content_assets.append(asset)
     campaign = campaigns.add(campaign)
     backend = FakeStructuredAgentBackend(
         [
-            *_draft_and_rewrite(
+            *(_draft_and_rewrite(
                 topic="Export des indicateurs du tableau utilisateur",
                 article_type="MAPSI_PRODUCT",
                 slug="export-indicateurs-rewrite",
                 draft_title="Titre brouillon",
                 rewrite_title="Titre reecrit",
                 source_ids=["knowledge:mapsi:feature:dashboard-indicators-export"],
-            )
+            )[-1:] if targeted_repair else _draft_and_rewrite(
+                topic="Export des indicateurs du tableau utilisateur", article_type="MAPSI_PRODUCT", slug="export-indicateurs-rewrite", draft_title="Titre brouillon", rewrite_title="Titre reecrit", source_ids=["knowledge:mapsi:feature:dashboard-indicators-export"],
+            ))
         ],
         provider_type="openai",
     )
@@ -245,12 +251,14 @@ def test_editorial_asset_mutation_service_snapshots_and_rewrites(session) -> Non
         audit_repository=audit,
     )
 
-    rewritten = service.regenerate(campaign.content_assets[0].id, actor="tester", expected_version=1, instruction="Raccourcir")
+    rewritten = service.regenerate(campaign.content_assets[0].id, actor="tester", expected_version=1, instruction="Raccourcir", targeted_repair=targeted_repair)
 
     snapshots = AssetRevisionRepository(session).list_for_asset(asset.id)
     assert rewritten.content_version == 2
     assert rewritten.title == "Titre reecrit"
-    assert [call["agent_name"] for call in backend.calls] == ["EditorialArticleGenerator", "EditorialArticleRewriteAgent"]
-    assert backend.calls[0]["input"]["publication_channel"] == "mapsi_site"
+    assert [call["agent_name"] for call in backend.calls] == (["EditorialArticleRewriteAgent"] if targeted_repair else ["EditorialArticleGenerator", "EditorialArticleRewriteAgent"])
+    context = backend.calls[0]["input"]["editorial_context"] if targeted_repair else backend.calls[0]["input"]
+    assert context["publication_channel"] == "mapsi_site"
+    assert context["published_topic_history"][0]["created_at"] == "2026-10-14T12:31:27"
     assert len(snapshots) == 1
     assert snapshots[0].title == "Titre initial"
