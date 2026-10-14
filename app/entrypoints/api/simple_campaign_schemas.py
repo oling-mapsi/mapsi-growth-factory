@@ -28,6 +28,7 @@ class SimpleAssetUpdateRequest(BaseModel):
 class SimpleAssetDecisionRequest(BaseModel):
     comment: str = ""
     expected_version: int | None = None
+    confirm_editorial_review: bool = Field(default=False, strict=True)
 
 
 class SimpleAssetImageRequest(BaseModel):

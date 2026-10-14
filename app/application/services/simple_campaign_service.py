@@ -91,6 +91,7 @@ class ApproveSimpleAssetCommand:
     comment: str = ""
     actor: str = "studio-simple"
     expected_version: int | None = None
+    confirm_editorial_review: bool = False
 
 
 @dataclass
@@ -234,7 +235,9 @@ class SimpleCampaignService:
         from app.application.services.growth_image_generation import GrowthImageResult
         from app.infrastructure.db.models import SimpleGenerationJobModel
         job = self.repository.session.get(SimpleGenerationJobModel, job_id) if job_id else None
-        retained_image = (job.parameters or {}).get('generated_image') if job else None
+        parameters = dict(job.parameters or {}) if job else {}
+        completing_articles = bool(parameters.get('complete_articles'))
+        retained_image = (parameters.get('generated_images') or {}).get(asset_id) if completing_articles else parameters.get('generated_image')
         result = GrowthImageResult(**retained_image, data_url='') if retained_image else self.image_service.generate(
             channel=external_channel,
             title=asset.title,
@@ -246,7 +249,7 @@ class SimpleCampaignService:
             from dataclasses import asdict
             reference = asdict(result)
             reference.pop('data_url', None)
-            job.parameters = {**job.parameters, 'generated_image': reference}
+            job.parameters = {**parameters, 'generated_images': {**parameters.get('generated_images', {}), asset_id: reference}} if completing_articles else {**parameters, 'generated_image': reference}
             self.repository.session.commit()
         self._refresh_progress_state(campaign)
         campaign = self.get_campaign(campaign_id)
@@ -395,7 +398,9 @@ class SimpleCampaignService:
         campaign = self.get_campaign(campaign_id)
         self._assert_simple_campaign(campaign)
         previous_status = campaign.status.value
-        job = self.generation_jobs.ensure_pending(campaign.id)
+        latest = self.generation_jobs.latest_for_campaign(campaign.id)
+        complete_articles = not campaign.content_assets or bool(latest and (latest.parameters or {}).get('complete_articles'))
+        job = self.generation_jobs.ensure_pending(campaign.id, parameters={'complete_articles': True} if complete_articles and self.image_service is not None else None)
         if campaign.status is CampaignStatus.GENERATING and job.status == "RUNNING":
             return campaign
         campaign.status = CampaignStatus.GENERATING
@@ -717,6 +722,25 @@ class SimpleCampaignService:
             for item in quality.get("issues", [])
             if isinstance(item, dict) and item.get("severity") == "error"
         ]
+        if command.confirm_editorial_review and blocking_issues and all(item.get('code') in {'manual_content_changed', 'editorial_content_mismatch'} for item in blocking_issues):
+            import json
+            from app.application.models.editorial_v1 import EditorialArticle
+            from app.application.services.editorial_engine_v1 import EditorialQualityValidator
+            from app.core.security import sha256_hexdigest
+            try:
+                payload = dict((asset.results or {}).get('builder_context') or {})
+                payload.setdefault('publication_channel', self.external_channel(asset.channel))
+                context = EditorialGenerationContext.model_validate_json(json.dumps(payload))
+                article = EditorialArticle.model_validate(asset.results['editorial_article']).model_copy(update={
+                    'title': asset.title, 'body_html': asset.content_html or asset.body, 'body_text': asset.content_text, 'excerpt': asset.excerpt})
+            except (ValueError, KeyError, TypeError) as exc:
+                raise InvalidStateTransitionError('Les sources de cet article doivent etre verifiees avant validation.') from exc
+            report = EditorialQualityValidator().validate(article, context)
+            quality = report.model_dump(mode='json')
+            blocking_issues = [item for item in quality['issues'] if item['severity'] == 'error']
+            asset.results = {**asset.results, 'editorial_article': article.model_dump(mode='json'), 'editorial_quality': quality,
+                'human_editorial_review': {'actor': command.actor, 'version': asset.content_version, 'content_hash': asset.content_hash},
+                'editorial_execution': {**asset.results.get('editorial_execution', {}), 'output_hash': sha256_hexdigest(article.model_dump_json())}}
         if quality and not quality.get("passed", False):
             raise InvalidStateTransitionError("Asset has blocking editorial quality issues.")
         if blocking_issues:
