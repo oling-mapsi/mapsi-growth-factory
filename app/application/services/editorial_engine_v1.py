@@ -4,6 +4,7 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from abc import ABC, abstractmethod
 from collections import Counter
 from dataclasses import dataclass
@@ -98,6 +99,12 @@ class OpenAIEditorialGenerator(EditorialGeneratorInterface):
 
     def generate(self, context: EditorialGenerationContext) -> EditorialGenerationEnvelope:
         input_hash = sha256_hexdigest(context.model_dump_json())
+        structured_log(
+            "editorial.article.step.started",
+            agent_name=self.agent_name,
+            article_type=context.article_type,
+            publication_channel=context.publication_channel,
+        )
         draft = self.run_structured_output(
             agent_name=self.agent_name,
             prompt=self._build_prompt(context),
@@ -105,24 +112,58 @@ class OpenAIEditorialGenerator(EditorialGeneratorInterface):
             output_type=EditorialArticle,
             prompt_version=EDITORIAL_PROMPT_VERSION,
         )
-        rewritten = self.run_structured_output(
-            agent_name="EditorialArticleRewriteAgent",
-            prompt=self._build_rewrite_prompt(context),
-            input_model=EditorialArticleRewriteContext(
-                editorial_context=context,
-                draft_article=cast(EditorialArticle, draft.output),
-            ),
-            output_type=EditorialArticle,
-            prompt_version=EDITORIAL_REWRITE_PROMPT_VERSION,
+        structured_log(
+            "editorial.article.step.completed",
+            agent_name=self.agent_name,
+            duration_ms=draft.duration_ms,
+            article_type=context.article_type,
+            publication_channel=context.publication_channel,
         )
-        output_hash = sha256_hexdigest(rewritten.output.model_dump_json())
+        try:
+            structured_log(
+                "editorial.article.step.started",
+                agent_name="EditorialArticleRewriteAgent",
+                article_type=context.article_type,
+                publication_channel=context.publication_channel,
+            )
+            rewritten = self.run_structured_output(
+                agent_name="EditorialArticleRewriteAgent",
+                prompt=self._build_rewrite_prompt(context),
+                input_model=EditorialArticleRewriteContext(
+                    editorial_context=context,
+                    draft_article=cast(EditorialArticle, draft.output),
+                ),
+                output_type=EditorialArticle,
+                prompt_version=EDITORIAL_REWRITE_PROMPT_VERSION,
+            )
+            structured_log(
+                "editorial.article.step.completed",
+                agent_name="EditorialArticleRewriteAgent",
+                duration_ms=rewritten.duration_ms,
+                article_type=context.article_type,
+                publication_channel=context.publication_channel,
+            )
+            final = rewritten
+            estimated_cost_usd = draft.estimated_cost_usd + rewritten.estimated_cost_usd
+            duration_ms = draft.duration_ms + rewritten.duration_ms
+        except Exception as exc:
+            structured_log(
+                "editorial.article.rewrite_failed_using_draft",
+                error_type=type(exc).__name__,
+                article_type=context.article_type,
+                publication_channel=context.publication_channel,
+            )
+            final = draft
+            estimated_cost_usd = draft.estimated_cost_usd
+            duration_ms = draft.duration_ms
+        output_hash = sha256_hexdigest(final.output.model_dump_json())
         return EditorialGenerationEnvelope(
-            article=cast(EditorialArticle, rewritten.output),
-            metadata=rewritten.metadata,
-            duration_ms=draft.duration_ms + rewritten.duration_ms,
+            article=cast(EditorialArticle, final.output),
+            metadata=final.metadata,
+            duration_ms=duration_ms,
             input_hash=input_hash,
             output_hash=output_hash,
-            estimated_cost_usd=draft.estimated_cost_usd + rewritten.estimated_cost_usd,
+            estimated_cost_usd=estimated_cost_usd,
         )
 
     def run_structured_output(
@@ -135,7 +176,10 @@ class OpenAIEditorialGenerator(EditorialGeneratorInterface):
         prompt_version: str,
     ) -> StructuredOutputEnvelope:
         started = time.perf_counter()
-        result = self.provider.run_structured(
+        timeout_seconds = get_settings().editorial_agent_timeout_seconds
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(
+            self.provider.run_structured,
             agent_name=agent_name,
             prompt=prompt,
             input_model=input_model,
@@ -144,6 +188,14 @@ class OpenAIEditorialGenerator(EditorialGeneratorInterface):
             prompt_version=prompt_version,
             temperature=self.temperature,
         )
+        try:
+            result = future.result(timeout=timeout_seconds)
+        except FutureTimeoutError as exc:
+            future.cancel()
+            structured_log("editorial.article.step.timeout", agent_name=agent_name, timeout_seconds=timeout_seconds)
+            raise EditorialGenerationBlockedError(f"{agent_name} timed out after {timeout_seconds:.0f}s.") from exc
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
         duration_ms = max(1, int((time.perf_counter() - started) * 1000))
         cost = _estimate_cost(result.metadata.token_usage)
         return StructuredOutputEnvelope(

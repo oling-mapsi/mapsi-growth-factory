@@ -11,6 +11,14 @@ from app.infrastructure.agents.fake_backend import FakeStructuredAgentBackend
 from app.infrastructure.db.models import ContentAssetModel, EditorialThemeHistoryModel, ProductChangeModel
 
 
+class RewriteFailingBackend(FakeStructuredAgentBackend):
+    def run_structured(self, **kwargs):
+        if kwargs["agent_name"] == "EditorialArticleRewriteAgent":
+            self.calls.append({"agent_name": kwargs["agent_name"]})
+            raise TimeoutError("rewrite timeout")
+        return super().run_structured(**kwargs)
+
+
 def _seed_recent_product_change(session, *, collected_at: datetime | None = None, summary: str = "Export du tableau utilisateur") -> None:
     session.add(
         ProductChangeModel(
@@ -249,6 +257,26 @@ def test_generate_articles_uses_two_openai_passes(session) -> None:
 
     service.generate_mapsi(destination="mapsi", persist=False)
 
+    assert [call["agent_name"] for call in backend.calls] == [
+        "EditorialArticleGenerator",
+        "EditorialArticleRewriteAgent",
+    ]
+
+
+def test_generate_articles_keeps_draft_when_rewrite_times_out(session) -> None:
+    _seed_recent_product_change(session)
+    payload = _article_payload(
+        topic="Export des indicateurs du tableau utilisateur",
+        article_type="MAPSI_PRODUCT",
+        source_ids=["knowledge:mapsi:feature:dashboard-indicators-export", "product_change:pc-1"],
+    )
+    backend = RewriteFailingBackend([payload], provider_type="openai")
+    service = build_editorial_generation_service(session, force_mode="real")
+    service.generator = OpenAIEditorialGenerator(backend)
+
+    record = service.generate_mapsi(destination="mapsi", persist=False)
+
+    assert record.article.title == payload["title"]
     assert [call["agent_name"] for call in backend.calls] == [
         "EditorialArticleGenerator",
         "EditorialArticleRewriteAgent",

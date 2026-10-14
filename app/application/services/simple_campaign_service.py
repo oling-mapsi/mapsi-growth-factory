@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 import re
+import time
 from mimetypes import guess_type
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -31,6 +32,7 @@ from app.domain.entities import CampaignRun, ContentAsset, EditorialBrief, Produ
 from app.domain.enums import AssetStatus, CampaignStatus
 from app.domain.errors import CampaignNotFoundError, CampaignPublicationForbiddenError, InvalidStateTransitionError
 from app.infrastructure.repositories.editorial_source_packs import EditorialSourcePackRepository
+from app.infrastructure.observability import structured_log
 from app.knowledge import KnowledgeRepository
 from app.knowledge.models import MapsiFeature, OlingPractice
 
@@ -310,20 +312,53 @@ class SimpleCampaignService:
     def generate_campaign(self, campaign_id: str) -> CampaignRun:
         campaign = self.get_campaign(campaign_id)
         self._assert_simple_campaign(campaign)
-        brief, assets, evidence = self._build_generation_payload(campaign)
+        started = time.perf_counter()
+        previous_status = campaign.status.value
+        campaign.status = CampaignStatus.GENERATING
+        self.repository.save(campaign)
+        structured_log(
+            "simple_campaign.generation.started",
+            campaign_id=campaign.id,
+            campaign_type=campaign.campaign_type,
+            channels=campaign.selected_channels,
+        )
+        try:
+            brief, assets, evidence = self._build_generation_payload(campaign)
+        except Exception as exc:
+            campaign.status = CampaignStatus.FAILED
+            saved = self.repository.save(campaign)
+            duration_ms = max(1, int((time.perf_counter() - started) * 1000))
+            self.audit_log.append(
+                saved.id,
+                "simple_campaign.generation_failed",
+                {"error_type": type(exc).__name__, "duration_ms": duration_ms},
+                actor_source="studio-simple",
+                previous_state={"status": previous_status},
+                new_state={"status": saved.status.value},
+                result="FAILURE",
+            )
+            structured_log(
+                "simple_campaign.generation.failed",
+                campaign_id=saved.id,
+                error_type=type(exc).__name__,
+                duration_ms=duration_ms,
+            )
+            raise
         campaign.source_evidences = evidence
         campaign.mark_generated(brief, assets)
         campaign._sync_status_from_assets()
         saved = self.repository.save(campaign)
+        duration_ms = max(1, int((time.perf_counter() - started) * 1000))
         self.audit_log.append(
             saved.id,
             "simple_campaign.generated",
-            {"asset_count": len(saved.content_assets), "channels": saved.selected_channels},
+            {"asset_count": len(saved.content_assets), "channels": saved.selected_channels, "duration_ms": duration_ms},
             actor_source="studio-simple",
-            previous_state={"status": "DRAFT"},
+            previous_state={"status": previous_status},
             new_state={"status": saved.status.value},
             result="SUCCESS",
         )
+        structured_log("simple_campaign.generation.completed", campaign_id=saved.id, asset_count=len(saved.content_assets), duration_ms=duration_ms)
         return saved
 
     def _build_generation_payload(self, campaign: CampaignRun) -> tuple[EditorialBrief, list[ContentAsset], list[SourceEvidence]]:
@@ -341,6 +376,7 @@ class SimpleCampaignService:
             results["mapsi_site"] = self.editorial_service.generate_from_context(
                 context=mapsi_context,
                 selection=self._mapsi_selection(campaign),
+                allow_failed_quality=True,
             )
         if "oling_site" in campaign.selected_channels:
             if campaign.campaign_type == "OLING":
@@ -350,6 +386,7 @@ class SimpleCampaignService:
                 results["oling_site"] = self.editorial_service.generate_from_context(
                     context=oling_context,
                     selection=self._oling_selection(campaign),
+                    allow_failed_quality=True,
                 )
             else:
                 consulting_context = self._build_mapsi_context(campaign, destination_site="oling.fr", article_type="MAPSI_CONSULTING")
@@ -358,6 +395,7 @@ class SimpleCampaignService:
                 results["oling_site"] = self.editorial_service.generate_from_context(
                     context=consulting_context,
                     selection=self._mapsi_selection(campaign),
+                    allow_failed_quality=True,
                 )
 
         primary_result = results.get("mapsi_site") or results.get("oling_site")
@@ -373,6 +411,7 @@ class SimpleCampaignService:
             primary_result = self.editorial_service.generate_from_context(
                 context=internal_context,
                 selection=internal_selection,
+                allow_failed_quality=True,
             )
 
         evidence = self._collect_editorial_evidence(campaign.id, [result.context for result in [*results.values(), primary_result]])
