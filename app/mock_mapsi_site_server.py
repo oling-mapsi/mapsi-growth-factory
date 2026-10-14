@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 import hashlib
+from html import escape
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Response
+from fastapi.responses import HTMLResponse
 
 app = FastAPI(title="Mock Mapsi Site News")
 
@@ -16,6 +18,14 @@ STATE: dict[str, Any] = {
 }
 
 VALID_TOKEN = "mapsi-site-test-token"
+
+@app.get('/actualites/{slug}',response_class=HTMLResponse)
+def public_article(slug: str):
+    for article in STATE['articles'].values():
+        if article.get('published_slug')==slug and article['status']=='published':
+            payload=article['payload']
+            return f'<html lang="fr"><head><link rel="canonical" href="{escape(payload["canonical_url"])}"></head><body><h1>{escape(payload["title"])}</h1><article>{payload["content_html"]}</article></body></html>'
+    raise HTTPException(status_code=404)
 
 
 def _correlation_id(value: str | None) -> str:
@@ -145,6 +155,7 @@ def create_draft(payload: dict[str, Any], authorization: str | None = Header(def
     article["updated_at"] = _updated_at()
     article["has_pending_draft"] = article["published_version"] is not None and article["draft_version"] != article["published_version"]
     article["content_hash"] = content_hash
+    article['payload'] = payload
     return Response(
         content=__import__("json").dumps(_article_response(article, correlation_id, idempotent_replay=False)),
         status_code=201 if created else 200,

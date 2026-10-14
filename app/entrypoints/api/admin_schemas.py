@@ -427,6 +427,8 @@ class StudioAdminPublicationOperationRequest(BaseModel):
 
 class StudioAdminPublicationRequest(StudioAdminPublicationOperationRequest):
     idempotency_key: str = Field(..., min_length=1)
+    expected_version: int | None = Field(default=None, ge=1)
+    approved_content_hash: str | None = None
 
 
 class StudioAdminPublicationOperationResponse(BaseModel):

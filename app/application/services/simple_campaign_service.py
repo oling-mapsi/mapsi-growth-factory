@@ -282,20 +282,28 @@ class SimpleCampaignService:
         return saved
 
     def get_asset_image_reference(self, asset_id: str) -> tuple[Path | None, str, str]:
+        session = getattr(self.repository, 'session', None)
+        if session is not None:
+            from app.infrastructure.db.models import ContentAssetModel
+            row = session.query(ContentAssetModel.results).filter(ContentAssetModel.id == asset_id).first()
+            if row is None:
+                raise CampaignNotFoundError(f'Asset {asset_id} not found.')
+            return self._image_reference(dict((row.results or {}).get('image') or {}))
         for campaign in self.repository.list():
             for asset in campaign.content_assets:
                 if asset.id != asset_id:
                     continue
-                image = dict((asset.results or {}).get("image") or {})
-                storage_path = str(image.get("storage_path") or "")
-                if storage_path:
-                    resolved = (self.project_root / storage_path).resolve()
-                    root = self.project_root.resolve()
-                    if root == resolved or root in resolved.parents:
-                        media_type = str(guess_type(str(resolved))[0] or "image/png")
-                        return resolved, media_type, str(image.get("alt_text") or "")
-                return None, "", str(image.get("data_url") or "")
+                return self._image_reference(dict((asset.results or {}).get('image') or {}))
         raise CampaignNotFoundError(f"Asset {asset_id} not found.")
+
+    def _image_reference(self, image: dict) -> tuple[Path | None, str, str]:
+        storage_path = str(image.get('storage_path') or '')
+        if storage_path:
+            resolved = (self.project_root / storage_path).resolve()
+            directory = (self.project_root / get_settings().growth_media_storage_dir).resolve()
+            if directory in resolved.parents:
+                return resolved, str(guess_type(str(resolved))[0] or 'image/png'), str(image.get('alt_text') or '')
+        return None, '', str(image.get('data_url') or '')
 
     def enqueue_asset_repair(self, campaign_id: str, asset_id: str, expected_version: int) -> CampaignRun:
         campaign = self.get_campaign(campaign_id)
@@ -444,6 +452,8 @@ class SimpleCampaignService:
         existing_evidence_ids = {item.id for item in campaign.source_evidences}
         campaign.source_evidences.extend([item for item in evidence if item.id not in existing_evidence_ids])
         merged_assets = self._merge_generated_assets(campaign.content_assets, assets)
+        if campaign.status in {CampaignStatus.PARTIALLY_PUBLISHED, CampaignStatus.PUBLISHED}:
+            campaign.status = CampaignStatus.GENERATING
         campaign.mark_generated(brief, merged_assets)
         # mark_generated normalizes fresh assets; completed drafts keep their exact state.
         campaign.content_assets = merged_assets
@@ -619,6 +629,8 @@ class SimpleCampaignService:
         campaign = self.get_campaign(campaign_id)
         self._assert_simple_campaign(campaign)
         asset = self._find_asset(campaign, asset_id)
+        if asset.status is AssetStatus.PUBLISHING:
+            raise InvalidStateTransitionError('Publication is running for this article; wait for destination confirmation.')
         if self.generation_jobs is not None:
             job = self.generation_jobs.latest_for_campaign(campaign_id)
             if job and job.status in {'PENDING','RUNNING'} and (job.parameters or {}).get('asset_id') == asset_id:
@@ -726,6 +738,8 @@ class SimpleCampaignService:
         campaign = self.get_campaign(campaign_id)
         self._assert_simple_campaign(campaign)
         channels = self._normalize_selected_channels(campaign.campaign_type, command.channels)
+        if set(channels) & {'oling_site', 'mapsi_site'}:
+            raise CampaignPublicationForbiddenError('SIMPLE web publication must target an individually approved asset and version.')
         for channel in channels:
             internal_channel = CHANNEL_TO_INTERNAL[channel]
             assets = [

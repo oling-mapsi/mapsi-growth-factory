@@ -137,7 +137,7 @@ class MapsiSiteConnector:
     def get_preview_url(self, external_id: str, *, correlation_id: str) -> dict[str, Any]:
         return self._parse_preview(self._request("POST", f"/api/growth/news/{external_id}/preview-url", correlation_id=correlation_id))
 
-    def publish(self, external_id: str, *, correlation_id: str, idempotency_key: str = "") -> dict[str, Any]:
+    def publish(self, external_id: str, *, correlation_id: str, idempotency_key: str = "", expected_revision: int | None = None) -> dict[str, Any]:
         headers = {}
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
@@ -145,6 +145,7 @@ class MapsiSiteConnector:
             self._request(
                 "POST",
                 f"/api/growth/news/{external_id}/publish",
+                json={'expected_revision':expected_revision},
                 correlation_id=correlation_id,
                 headers=headers,
                 retry_on_transport_errors=False,

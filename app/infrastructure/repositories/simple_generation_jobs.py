@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
+import re
 
 from sqlalchemy.orm import Session
 
@@ -127,7 +128,13 @@ class SimpleGenerationJobRepository:
         parts = job.stage.split(':')
         job.stage = ':'.join(parts[:-1] + ['FAILED']) if len(parts) == 3 else 'FAILED'
         job.error_type = type(exc).__name__
-        job.error_message = str(exc)[:4000]
+        message = str(exc)
+        if re.search(r'insufficient_quota|credit_balance_exhausted', message, re.I):
+            message = 'Crédit API OpenAI épuisé — génération suspendue'
+        else:
+            message = re.sub(r'sk-[A-Za-z0-9_.-]+', '[cle API masquee]', message)
+            message = re.sub(r'Bearer\s+[A-Za-z0-9_.-]+', 'Bearer [masque]', message, flags=re.I)
+        job.error_message = message[:4000]
         job.updated_at = now
         job.completed_at = now
         self.session.commit()

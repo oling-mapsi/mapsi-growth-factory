@@ -38,4 +38,6 @@ def prepare_publication_media(asset, connector, html: str, *, correlation_id: st
     soup = BeautifulSoup(attach_illustration(html, asset_id=asset.id, alt=str(image.get("alt_text") or asset.title), placement=image.get("placement", "after_intro")), "html.parser")
     for element in soup.find_all("img", src=f"/studio-simple/assets/{asset.id}/image"):
         element["src"] = imported["public_url"]
+    if any('/studio-simple/assets/' in element.get('src','') or '/admin/growth/' in element.get('src','') for element in soup.find_all('img')):
+        raise CampaignPublicationForbiddenError('Private Growth illustrations cannot remain in published HTML.')
     return str(soup), imported["public_url"]

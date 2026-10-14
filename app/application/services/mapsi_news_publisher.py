@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from app.application.services.review_portal_service import ReviewPortalService
+from app.application.services.growth_publication_verification import matches_published_version
 from app.core.config import get_settings
 from app.domain.entities import CampaignRun, ContentAsset, MapsiNewsPublication, Publication, utcnow
 from app.domain.enums import AssetStatus
@@ -88,7 +89,7 @@ class MapsiNewsPublisher:
 
     def publish(self, campaign: CampaignRun, asset: ContentAsset, *, idempotency_key: str = "") -> Publication:
         existing = self.publication_repository.get_by_asset_hash(asset.id, asset.content_hash)
-        if existing is not None and existing.publication_status == "PUBLISHED":
+        if matches_published_version(existing, asset, 'mapsi_site_api'):
             existing.publication_mode_requested = "publish"
             existing.publication_mode_executed = self._executed_mode("publish")
             existing.publisher_type = self._publisher_type()
@@ -122,6 +123,7 @@ class MapsiNewsPublisher:
                 asset.id,
                 correlation_id=self._correlation_id(campaign, asset, "publish"),
                 idempotency_key=publication.idempotency_key,
+                expected_revision=publication.draft_revision_number,
             )
         except ExternalConnectorError as exc:
             status = self._reconcile_after_publish_error(campaign, asset, publication, exc)
@@ -179,6 +181,7 @@ class MapsiNewsPublisher:
         publication.last_error = ""
         publication = self.publication_repository.save(publication)
         self._apply_asset_results(asset, publication)
+        self._ensure_campaign_publication(campaign, asset, publication)
         self._save_campaign_asset(campaign, asset)
         return self._serialize(publication)
 
@@ -249,7 +252,8 @@ class MapsiNewsPublisher:
     def _upsert_draft(self, campaign: CampaignRun, asset: ContentAsset, *, operation: str) -> MapsiNewsPublication:
         existing = self.publication_repository.get_latest_for_asset(asset.id)
         same_hash = self.publication_repository.get_by_asset_hash(asset.id, asset.content_hash)
-        if same_hash and same_hash.status in {"published", "draft", "unpublished"}:
+        same_draft = same_hash and same_hash.status == 'draft' and same_hash.metrics.get('source_content_version') == asset.content_version and same_hash.publisher_type == self._publisher_type()
+        if (same_draft and operation != 'publish') or matches_published_version(same_hash, asset, 'mapsi_site_api'):
             self._refresh_preview(campaign, asset, same_hash)
             return same_hash
         publication = existing or MapsiNewsPublication(
@@ -264,11 +268,12 @@ class MapsiNewsPublisher:
             publication_status="DRAFT",
             idempotency_key=self._resolved_idempotency_key(asset, ""),
         )
-        if existing and existing.content_hash == asset.content_hash and operation == "publish" and existing.status == "published":
+        if existing and existing.content_hash == asset.content_hash and existing.published_content_version == asset.content_version and existing.publication_mode_executed == 'live' and operation == "publish" and existing.status == "published":
             raise DuplicateCampaignPublicationError("This Mapsi Site asset version has already been published.")
-        self._push_draft(asset, campaign, method="PATCH" if existing else "POST", payload=self._payload_for(campaign, asset))
+        self._push_draft(asset, campaign, method="PATCH" if existing and existing.publication_mode_executed == 'live' else "POST", payload=self._payload_for(campaign, asset))
         status = self.connector.get_status(asset.id, correlation_id=self._correlation_id(campaign, asset, "status"))
         publication.content_hash = asset.content_hash
+        publication.metrics = {**publication.metrics, 'source_content_version':asset.content_version}
         publication.mode = self.settings.mapsi_site_mode
         publication.publication_mode_requested = operation
         publication.publication_mode_executed = self._executed_mode(operation)
@@ -340,12 +345,23 @@ class MapsiNewsPublisher:
         publication.public_slug = status.get("slug", publication.public_slug)
         publication.status = status.get("status", publication.status)
         publication.publication_status = self._publication_status_from_remote(status, publication.preview_url)
+        if status.get('has_pending_draft') and publication.published_content_version != asset.content_version:
+            publication.publication_status = 'PREVIEW_READY'
         publication.draft_revision_number = status.get("version", publication.draft_revision_number)
         publication.published_revision_number = status.get("published_version") or (
             status.get("version") if status.get("status") == "published" else publication.published_revision_number
         )
         publication.published_at = self._parse_dt(status.get("published_at")) or publication.published_at
         publication.public_url = status.get("public_url") or ""
+        if publication.publication_status == 'PUBLISHED' and publication.content_hash == asset.content_hash and self.settings.mapsi_site_mode != 'mock':
+            from app.application.services.growth_publication_verification import verify_publication
+            try:
+                publication.metrics = {**publication.metrics, 'public_verification':verify_publication(self.connector, asset, publication.public_url)}
+            except ExternalConnectorError as exc:
+                publication.publication_status = 'PUBLISHING'
+                publication.last_error = str(exc)
+                self.publication_repository.save(publication)
+                raise
         if status.get("status") == "unpublished":
             publication.unpublished_at = utcnow()
         publication.metrics = {
@@ -409,10 +425,14 @@ class MapsiNewsPublisher:
     def _apply_asset_results(self, asset: ContentAsset, publication: MapsiNewsPublication) -> None:
         asset.external_publication_id = publication.external_id
         asset.external_publication_url = publication.public_url
-        asset.published_at = publication.published_at
+        asset.published_at = publication.published_at if publication.content_hash == asset.content_hash else None
         asset.last_error = publication.last_error
-        if publication.publication_status == "PUBLISHED":
+        if publication.publication_status == "PUBLISHED" and publication.content_hash == asset.content_hash:
             asset.mark_published(external_id=publication.external_id, external_url=publication.public_url, published_at=publication.published_at)
+        elif publication.publication_status == 'UNPUBLISHED':
+            asset.published_at = None
+            if asset.status in {AssetStatus.PUBLISHED, AssetStatus.PUBLISHING}:
+                asset.status = AssetStatus.APPROVED if asset.approved_content_hash == asset.content_hash and asset.approved_at else AssetStatus.READY_FOR_REVIEW
         elif publication.publication_status == "FAILED":
             asset.mark_failed(publication.last_error or "Mapsi Site publication failed.")
         elif publication.publication_status in {"DRAFT", "PREVIEW_READY"} and asset.status is AssetStatus.FAILED:
@@ -447,7 +467,8 @@ class MapsiNewsPublisher:
             if current.id == asset.id:
                 campaign.content_assets[index] = asset
                 break
-        self.campaign_repository.save(campaign)
+        from app.application.services.growth_campaign_updates import save_publishing_asset
+        save_publishing_asset(self.campaign_repository, campaign, asset)
 
     def _publisher_type(self) -> str:
         return "mapsi_site_mock" if self.settings.mapsi_site_mode == "mock" else "mapsi_site_api"
@@ -485,7 +506,7 @@ class MapsiNewsPublisher:
         )
 
     def _ensure_campaign_publication(self, campaign: CampaignRun, asset: ContentAsset, publication: MapsiNewsPublication) -> None:
-        if publication.publication_status != "PUBLISHED":
+        if publication.publication_status != "PUBLISHED" or publication.content_hash != asset.content_hash:
             return
         campaign.publish(self._build_publication(campaign, asset, publication))
 

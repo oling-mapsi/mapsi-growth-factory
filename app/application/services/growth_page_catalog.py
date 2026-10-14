@@ -1,6 +1,7 @@
 import json
 import re
 import time
+import tempfile
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -23,7 +24,8 @@ class PublicPageCatalog:
     def candidates(self, *, channel: str, locale: str, title: str, text: str) -> list[dict]:
         host = 'mapsi.fr' if channel == 'mapsi_site' else 'oling.fr'
         language = 'fr' if channel == 'mapsi_site' else locale[:2]
-        query = words(title)
+        topic = words(title)
+        query = set(topic)
         if 'erp' in query:
             query |= {'amoa','progiciel','cadrage','migration','recette','erp','implementation','implantacion'}
         urls = self._urls(host)
@@ -39,6 +41,10 @@ class PublicPageCatalog:
             overlap = query & words(page['label']+' '+page['description']+' '+urlparse(page['url']).path)
             if not overlap:
                 continue
+            focused = topic & words(page['label']+' '+urlparse(page['url']).path)
+            generic = {'pilotage','gestion','actions','plans','conformite','methode','processus','management','project','implementation','accompagnement'}
+            if not focused - generic:
+                continue
             anchors = [word for word in re.findall(r'\b[\w-]{3,}\b', text) if words(word) & overlap]
             if not anchors:
                 continue
@@ -51,7 +57,10 @@ class PublicPageCatalog:
     def _urls(self, host: str) -> list[str]:
         key = self.directory / (host+'.json')
         if key.is_file() and time.time()-key.stat().st_mtime < 3600:
-            return json.loads(key.read_text())
+            try:
+                return json.loads(key.read_text())
+            except (OSError, ValueError):
+                pass
         urls = set()
         pending = [f'https://{host}/sitemap.xml']
         visited = set()
@@ -74,7 +83,10 @@ class PublicPageCatalog:
                     else: urls.add(link)
         if urls:
             self.directory.mkdir(parents=True, exist_ok=True)
-            key.write_text(json.dumps(sorted(urls)))
+            with tempfile.NamedTemporaryFile(mode='w', dir=self.directory, prefix=host, delete=False) as temporary:
+                json.dump(sorted(urls), temporary)
+                name = temporary.name
+            Path(name).replace(key)
         return sorted(urls)
 
     def _page(self, url: str, host: str, language: str) -> dict | None:

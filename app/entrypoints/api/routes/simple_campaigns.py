@@ -1,4 +1,5 @@
 from __future__ import annotations
+from datetime import UTC
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse, Response
@@ -60,7 +61,7 @@ def _response(service: SimpleCampaignService, campaign, *, include_image_data: b
                 "error_type": job.error_type,
                 "error_message": job.error_message,
                 "attempts": job.attempts,
-                "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+                "updated_at": (job.updated_at if job.updated_at.tzinfo else job.updated_at.replace(tzinfo=UTC)).isoformat() if job.updated_at else None,
                 "asset_id": (job.parameters or {}).get('asset_id'),
             }
     return SimpleCampaignResponse(
@@ -89,11 +90,14 @@ def _response(service: SimpleCampaignService, campaign, *, include_image_data: b
                 seo_geo=dict((item.results or {}).get("seo_geo") or {}),
                 editorial_quality=dict((item.results or {}).get("editorial_quality") or {}),
                 quality_blocking=not bool(dict((item.results or {}).get("editorial_quality") or {}).get("passed", True)),
+                sources=[{key:source.get(key,'') for key in ('source_id','label','summary')} for source in ((item.results or {}).get('builder_context') or {}).get('sources',[]) if isinstance(source,dict)],
+                claims=list(((item.results or {}).get('editorial_article') or {}).get('claims') or []),
                 status=service.simple_asset_status(item),
                 version=item.content_version,
                 approved_by=item.approved_by,
                 approved_at=item.approved_at,
                 approved_version=item.content_version if item.approved_content_hash and item.approved_content_hash == item.content_hash else None,
+                approved_content_hash=item.approved_content_hash,
                 public_url=item.external_publication_url,
                 published_at=item.published_at,
             )

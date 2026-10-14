@@ -251,7 +251,7 @@ def test_mapsi_site_publish_timeout_after_remote_success_is_reconciled(session) 
     campaign = seed_campaign(session)
     asset = campaign.content_assets[0]
 
-    def timeout_after_remote_publish(external_id: str, *, correlation_id: str, idempotency_key: str = ""):
+    def timeout_after_remote_publish(external_id: str, *, correlation_id: str, idempotency_key: str = "", expected_revision: int | None = None):
         article = STATE["articles"][external_id]
         article["published_version"] = article["draft_version"]
         article["published_slug"] = article["draft_slug"]

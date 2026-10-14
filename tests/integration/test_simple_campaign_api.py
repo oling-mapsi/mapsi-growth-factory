@@ -2,7 +2,7 @@ import os
 from uuid import uuid4
 
 from app.core.config import get_settings
-from app.domain.entities import CampaignRun
+from app.domain.entities import CampaignRun, Publication
 from app.infrastructure.repositories.campaigns import SqlAlchemyCampaignRepository
 from tests.support_auth import auth_headers
 
@@ -153,7 +153,7 @@ def test_simple_campaign_lifecycle(client) -> None:
     publish_partial = client.post(
         f"/studio-simple/campaigns/{campaign_id}/publish",
         headers=auth_headers(roles=["ROLE_GROWTH_PUBLISH"], jti=str(uuid4())),
-        json={"channels": ["mapsi_site", "linkedin_manual", "email_manual"]},
+        json={"channels": ["linkedin_manual", "email_manual"]},
     )
     assert publish_partial.status_code == 200
     assert publish_partial.json()["status"] == "PARTIALLY_PUBLISHED"
@@ -163,9 +163,10 @@ def test_simple_campaign_lifecycle(client) -> None:
         headers=auth_headers(roles=["ROLE_GROWTH_PUBLISH"], jti=str(uuid4())),
         json={"channels": ["oling_site"]},
     )
-    assert publish_final.status_code == 200
-    assert publish_final.json()["status"] == "PUBLISHED"
-    assert len(publish_final.json()["publications"]) == 6
+    assert publish_final.status_code == 409
+    historical = client.get(f'/studio-simple/campaigns/{campaign_id}',headers=auth_headers(roles=['ROLE_GROWTH_VIEW'],jti=str(uuid4()))).json()
+    assert len(historical['publications']) == 2
+    assert all(asset['status'] != 'PUBLISHED' for asset in historical['content_assets'] if asset['channel'] in {'mapsi_site','oling_site'})
 
 
 def test_simple_asset_readiness_does_not_require_global_campaign_approval(client) -> None:
@@ -439,7 +440,7 @@ def test_simple_campaign_can_be_deleted_before_publication(client) -> None:
     assert get_response.status_code == 404
 
 
-def test_simple_campaign_archive_and_unpublish_are_explicit(client) -> None:
+def test_simple_campaign_archive_and_unpublish_are_explicit(client, session) -> None:
     create_response = client.post(
         "/studio-simple/campaigns",
         headers=auth_headers(roles=["ROLE_GROWTH_REVIEW"], jti=str(uuid4())),
@@ -458,12 +459,12 @@ def test_simple_campaign_archive_and_unpublish_are_explicit(client) -> None:
     )
     assert generate_response.status_code == 200
     approve_all_assets(client, campaign_id, generate_response.json()["content_assets"])
-    publish_response = client.post(
-        f"/studio-simple/campaigns/{campaign_id}/publish",
-        headers=auth_headers(roles=["ROLE_GROWTH_PUBLISH"], jti=str(uuid4())),
-        json={"channels": ["mapsi_site", "oling_site"]},
-    )
-    assert publish_response.status_code == 200
+    # Historical publications are fixtures, not simulated claims of real publishing.
+    repository = SqlAlchemyCampaignRepository(session)
+    campaign = repository.get(campaign_id)
+    for asset in campaign.content_assets:
+        campaign.publish(Publication(campaign_run_id=campaign_id,content_asset_id=asset.id,channel=asset.channel,external_reference='historical-fixture',external_url='https://recette.invalid/'+asset.id))
+    repository.save(campaign)
 
     delete_response = client.delete(
         f"/studio-simple/campaigns/{campaign_id}",

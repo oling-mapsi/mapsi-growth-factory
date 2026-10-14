@@ -81,8 +81,8 @@ class OlingConnector:
     def get_preview_url(self, external_id: str, *, locale: str = "fr", correlation_id: str) -> dict[str, Any]:
         return self._request("POST", f"/api/growth/news/{external_id}/preview-url", params={"locale": locale}, correlation_id=correlation_id).json()
 
-    def publish(self, external_id: str, *, locale: str = "fr", correlation_id: str) -> dict[str, Any]:
-        return self._request("POST", f"/api/growth/news/{external_id}/publish", params={"locale": locale}, correlation_id=correlation_id).json()
+    def publish(self, external_id: str, *, locale: str = "fr", correlation_id: str, expected_revision: int | None = None) -> dict[str, Any]:
+        return self._request("POST", f"/api/growth/news/{external_id}/publish", params={"locale": locale}, json={'expected_revision':expected_revision}, correlation_id=correlation_id).json()
 
     def get_status(self, external_id: str, *, locale: str = "fr", correlation_id: str) -> dict[str, Any]:
         return self._request("GET", f"/api/growth/news/{external_id}", params={"locale": locale}, correlation_id=correlation_id).json()

@@ -7,6 +7,7 @@ from typing import Any
 
 from app.application.ports.connectors import OlingSiteConnectorPort
 from app.application.services.review_portal_service import ReviewPortalService
+from app.application.services.growth_publication_verification import matches_published_version
 from app.core.config import get_settings
 from app.domain.entities import CampaignRun, ContentAsset, OlingNewsPublication, Publication, utcnow
 from app.domain.enums import AssetStatus
@@ -88,7 +89,7 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
 
     def publish(self, campaign: CampaignRun, asset: ContentAsset, *, idempotency_key: str = "") -> Publication:
         existing = self.publication_repository.get_by_asset_hash(asset.id, asset.content_hash)
-        if existing is not None and existing.publication_status == "PUBLISHED":
+        if matches_published_version(existing, asset, 'oling_api'):
             self._apply_asset_results(asset, existing)
             self._ensure_campaign_publication(campaign, asset, existing)
             self._save_campaign_asset(campaign, asset)
@@ -111,7 +112,7 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
         locale = self._oling_locale(asset.locale)
         preview = self.connector.get_preview_url(remote_id, locale=locale, correlation_id=self._correlation_id(campaign, asset, "preview-url"))
         try:
-            status = self.connector.publish(remote_id, locale=locale, correlation_id=self._correlation_id(campaign, asset, "publish"))
+            status = self.connector.publish(remote_id, locale=locale, correlation_id=self._correlation_id(campaign, asset, "publish"), expected_revision=publication.draft_revision_number)
         except ExternalConnectorError as exc:
             status = self._reconcile_after_publish_error(campaign, asset, publication, exc)
         publication.preview_url = preview.get("preview_url", publication.preview_url)
@@ -230,6 +231,7 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
         publication.last_error = ""
         publication = self.publication_repository.save(publication)
         self._apply_asset_results(asset, publication)
+        self._ensure_campaign_publication(campaign, asset, publication)
         self._save_campaign_asset(campaign, asset)
         return self._serialize(publication)
 
@@ -333,7 +335,8 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
     def _upsert_draft(self, campaign: CampaignRun, asset: ContentAsset, *, operation: str) -> OlingNewsPublication:
         existing = self.publication_repository.get_latest_for_asset(asset.id)
         same_hash = self.publication_repository.get_by_asset_hash(asset.id, asset.content_hash)
-        if same_hash and same_hash.status in {"published", "draft", "unpublished"}:
+        same_draft = same_hash and same_hash.status == 'draft' and same_hash.metrics.get('source_content_version') == asset.content_version and same_hash.publisher_type == self._publisher_type()
+        if (same_draft and operation != 'publish') or matches_published_version(same_hash, asset, 'oling_api'):
             self._refresh_preview(campaign, asset, same_hash)
             return same_hash
         publication = existing or OlingNewsPublication(
@@ -348,16 +351,17 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
             publication_status="DRAFT",
             idempotency_key=self._resolved_idempotency_key(asset, ""),
         )
-        if existing and existing.content_hash == asset.content_hash and operation == "publish" and existing.status == "published":
+        if existing and existing.content_hash == asset.content_hash and existing.published_content_version == asset.content_version and existing.publication_mode_executed == 'live' and operation == "publish" and existing.status == "published":
             raise DuplicateCampaignPublicationError("This Oling asset version has already been published.")
         payload = self._payload_for(campaign, asset)
-        self._push_draft(asset, campaign, method="PATCH" if existing else "POST", payload=payload)
+        self._push_draft(asset, campaign, method="PATCH" if existing and existing.publication_mode_executed == 'live' else "POST", payload=payload)
         status = self.connector.get_status(
             self._remote_external_id(campaign, asset),
             locale=self._oling_locale(asset.locale),
             correlation_id=self._correlation_id(campaign, asset, "status"),
         )
         publication.content_hash = asset.content_hash
+        publication.metrics = {**publication.metrics, 'source_content_version':asset.content_version}
         publication.mode = self.settings.oling_mode
         publication.publication_mode_requested = operation
         publication.publication_mode_executed = self._executed_mode(operation)
@@ -441,12 +445,23 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
         publication.public_slug = status.get("public_slug", publication.public_slug)
         publication.status = status.get("publication_status", publication.status)
         publication.publication_status = self._publication_status_from_remote(status, publication.preview_url)
+        if status.get('has_pending_draft') and publication.published_content_version != asset.content_version:
+            publication.publication_status = 'PREVIEW_READY'
         publication.draft_revision_number = status.get("draft_revision_number", publication.draft_revision_number)
         publication.published_revision_number = status.get("published_revision_number", publication.published_revision_number)
         publication.published_at = self._parse_dt(status.get("published_at")) or publication.published_at
         publication.unpublished_at = self._parse_dt(status.get("unpublished_at")) or publication.unpublished_at
-        publication.public_url = self._public_url_for_slug(publication.public_slug, self._oling_locale(asset.locale))
+        publication.public_url = status.get('public_url') or self._public_url_for_slug(publication.public_slug, self._oling_locale(asset.locale))
         publication.metrics = {**publication.metrics, **status, "remote_external_id": status.get("external_id")}
+        if publication.publication_status == 'PUBLISHED' and publication.content_hash == asset.content_hash and self.settings.oling_mode != 'mock':
+            from app.application.services.growth_publication_verification import verify_publication
+            try:
+                publication.metrics = {**publication.metrics, 'public_verification':verify_publication(self.connector, asset, publication.public_url)}
+            except ExternalConnectorError as exc:
+                publication.publication_status = 'PUBLISHING'
+                publication.last_error = str(exc)
+                self.publication_repository.save(publication)
+                raise
 
     def _public_url(self, public_slug: str) -> str:
         return self._public_url_for_slug(public_slug, "fr")
@@ -499,14 +514,18 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
     def _apply_asset_results(self, asset: ContentAsset, publication: OlingNewsPublication) -> None:
         asset.external_publication_id = publication.external_id
         asset.external_publication_url = publication.public_url
-        asset.published_at = publication.published_at
+        asset.published_at = publication.published_at if publication.content_hash == asset.content_hash else None
         asset.last_error = publication.last_error
-        if publication.publication_status == "PUBLISHED":
+        if publication.publication_status == "PUBLISHED" and publication.content_hash == asset.content_hash:
             asset.mark_published(
                 external_id=publication.external_id,
                 external_url=publication.public_url,
                 published_at=publication.published_at,
             )
+        elif publication.publication_status == 'UNPUBLISHED':
+            asset.published_at = None
+            if asset.status in {AssetStatus.PUBLISHED, AssetStatus.PUBLISHING}:
+                asset.status = AssetStatus.APPROVED if asset.approved_content_hash == asset.content_hash and asset.approved_at else AssetStatus.READY_FOR_REVIEW
         elif publication.publication_status == "FAILED":
             asset.mark_failed(publication.last_error or "Oling publication failed.")
         elif publication.publication_status in {"DRAFT", "PREVIEW_READY"} and asset.status is AssetStatus.FAILED:
@@ -534,7 +553,8 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
             if current.id == asset.id:
                 campaign.content_assets[index] = asset
                 break
-        self.campaign_repository.save(campaign)
+        from app.application.services.growth_campaign_updates import save_publishing_asset
+        save_publishing_asset(self.campaign_repository, campaign, asset)
 
     def _correlation_id(self, campaign: CampaignRun, asset: ContentAsset, operation: str) -> str:
         return f"oling:{campaign.id}:{asset.id}:{operation}"
@@ -575,7 +595,7 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
         )
 
     def _ensure_campaign_publication(self, campaign: CampaignRun, asset: ContentAsset, publication: OlingNewsPublication) -> None:
-        if publication.publication_status != "PUBLISHED":
+        if publication.publication_status != "PUBLISHED" or publication.content_hash != asset.content_hash:
             return
         campaign.publish(self._build_publication(campaign, asset, publication))
 

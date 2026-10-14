@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from html import escape
 
 from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi.responses import HTMLResponse
 
 app = FastAPI(title="Mock Oling")
 
@@ -10,6 +12,17 @@ STATE: dict[str, dict] = {
     "articles": {},
     "preview_tokens": {},
 }
+
+@app.get('/ressources/{slug}',response_class=HTMLResponse)
+@app.get('/en/resources/{slug}',response_class=HTMLResponse)
+@app.get('/es/recursos/{slug}',response_class=HTMLResponse)
+def public_article(slug: str):
+    for article in STATE['articles'].values():
+        for locale in article.get('locales',[]):
+            if locale.get('slug')==slug and locale.get('status')=='published':
+                payload=article.get('locale_payloads',{}).get(locale['locale'],article['payload'])
+                return f'<html lang="{locale["locale"]}"><head><link rel="canonical" href="{escape(payload["canonical_url"])}"></head><body><h1>{escape(payload["title"])}</h1><article>{payload["content_html"]}</article></body></html>'
+    raise HTTPException(status_code=404)
 
 VALID_TOKEN = "oling-test-token"
 
@@ -81,6 +94,7 @@ def create_or_update_draft(payload: dict, authorization: str | None = Header(def
             "last_correlation_id": x_correlation_id,
         }
         STATE["articles"][external_id] = article
+        article['locale_payloads'] = {locale: payload}
         return _status_payload(article, 201)
     locale = payload.get("locale", article.get("locale", "fr"))
     article["slug"] = payload["slug"]
@@ -89,6 +103,7 @@ def create_or_update_draft(payload: dict, authorization: str | None = Header(def
     article["draft_revision_number"] = (article.get("draft_revision_number") or 0) + 1
     article["locales"] = _upsert_locale(article.get("locales", []), locale, payload["slug"], "draft", draft_revision_number=article["draft_revision_number"])
     article["payload"] = payload
+    article.setdefault('locale_payloads',{})[locale] = payload
     article["publication_status"] = "draft"
     article["last_correlation_id"] = x_correlation_id
     return _status_payload(article, 200)

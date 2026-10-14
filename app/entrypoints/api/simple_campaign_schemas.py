@@ -65,10 +65,13 @@ class SimpleAssetResponse(BaseModel):
     approved_by: str
     approved_at: datetime | None
     approved_version: int | None
+    approved_content_hash: str = ''
     public_url: str
     published_at: datetime | None
     editorial_quality: dict = Field(default_factory=dict)
     quality_blocking: bool = False
+    sources: list[dict] = Field(default_factory=list)
+    claims: list[dict] = Field(default_factory=list)
 
 
 class SimpleCampaignResponse(BaseModel):

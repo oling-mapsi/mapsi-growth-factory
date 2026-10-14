@@ -96,7 +96,7 @@ def test_oling_publish_and_preview_are_persisted(session, monkeypatch) -> None:
     assert stored is not None
     assert stored.preview_url.startswith("http://testserver/preview/ressources/")
     assert stored.public_url == "https://www.oling.fr/ressources/article-oling"
-    assert stored.published_revision_number == 1
+    assert stored.published_revision_number == STATE['articles'][campaign.id]['published_revision_number'] == 2
     assert stored.published_content_version == 1
     assert stored.publication_mode_requested == "publish"
     assert stored.publication_mode_executed == "live"
@@ -382,7 +382,7 @@ def test_oling_publish_timeout_after_remote_success_is_reconciled(session) -> No
     campaign = seed_campaign(session)
     asset = campaign.content_assets[0]
 
-    def timeout_after_remote_publish(external_id: str, *, correlation_id: str, locale: str = "fr"):
+    def timeout_after_remote_publish(external_id: str, *, correlation_id: str, locale: str = "fr", expected_revision: int | None = None):
         article = STATE["articles"][external_id]
         article["published_revision_number"] = article["draft_revision_number"]
         article["publication_status"] = "published"

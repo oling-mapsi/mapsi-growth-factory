@@ -204,7 +204,7 @@ class StudioAdminService:
                 "pilot_mode": pilot_mode,
             },
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             result="SUCCESS",
         )
@@ -254,7 +254,7 @@ class StudioAdminService:
                 "operational_errors": errors,
             },
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             result="SUCCESS" if not errors else "PARTIAL_SUCCESS",
         )
@@ -295,7 +295,7 @@ class StudioAdminService:
                 "operational_errors": errors,
             },
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             result="SUCCESS" if not errors else "PARTIAL_SUCCESS",
         )
@@ -315,7 +315,7 @@ class StudioAdminService:
                 "status": saved.status,
             },
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             result="SUCCESS",
         )
@@ -393,7 +393,7 @@ class StudioAdminService:
                 "after": report,
             },
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             result="SUCCESS",
         )
@@ -427,7 +427,7 @@ class StudioAdminService:
             "editorial_source_pack.created",
             {"source_pack_id": pack.id, "campaign_type": campaign_type},
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             result="SUCCESS",
         )
@@ -457,7 +457,7 @@ class StudioAdminService:
             "editorial_source_pack.updated",
             {"source_pack_id": pack.id},
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             previous_state=previous_state,
             new_state={"title": title, "summary": summary, "confidentiality_level": confidentiality_level},
@@ -476,7 +476,7 @@ class StudioAdminService:
             "editorial_source_pack.validated",
             {"source_pack_id": pack.id},
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             new_state={"status": "VALIDATED"},
             result="SUCCESS",
@@ -500,7 +500,7 @@ class StudioAdminService:
             "editorial_source_item.created",
             {"source_pack_id": pack.id, "source_item_id": item.id, "source_type": item.source_type},
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             result="SUCCESS",
         )
@@ -532,7 +532,7 @@ class StudioAdminService:
             "editorial_source_item.updated",
             {"source_pack_id": pack.id, "source_item_id": item_id},
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             previous_state=previous_state,
             new_state={
@@ -563,7 +563,7 @@ class StudioAdminService:
             "editorial_source_item.deleted",
             {"source_pack_id": pack.id, "source_item_id": item_id},
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             result="SUCCESS",
         )
@@ -994,6 +994,15 @@ class StudioAdminService:
         scheduled_at: datetime | None = None,
     ) -> StudioAdminPublicationOperation:
         campaign, asset = self._find_asset(asset_id)
+        if asset.status is AssetStatus.PUBLISHING and asset.channel in {'oling', 'mapsi_site'}:
+            repository = self.oling_publications if asset.channel == 'oling' else self.mapsi_site_publications
+            confirmed = repository.get_by_asset_hash(asset.id, asset.content_hash)
+            if confirmed is not None and confirmed.publication_status == 'PUBLISHED':
+                publisher = self.oling_publisher if asset.channel == 'oling' else self.mapsi_publisher
+                publisher.publish(campaign, asset)
+            elif confirmed is not None and confirmed.publication_status == 'PUBLISHING' and confirmed.status == 'published':
+                publisher = self.oling_publisher if asset.channel == 'oling' else self.mapsi_publisher
+                publisher.get_publication_status(campaign, asset)
         readiness = self._asset_publication_readiness(campaign, asset, scheduled_at=scheduled_at or asset.scheduled_at)
         status = "ready" if readiness.get("publishable") else "blocked"
         return self._publication_operation(
@@ -1022,7 +1031,7 @@ class StudioAdminService:
                 {"preview_url": str(details.get("preview_url") or "")},
                 asset_id=asset.id,
                 actor_id=actor,
-                actor_source="mapsi-studio",
+                actor_source=self.settings.studio_admin_jwt_issuer,
                 correlation_id=correlation_id,
                 previous_state={"status": asset.status.value},
                 new_state={"status": asset.status.value},
@@ -1049,7 +1058,7 @@ class StudioAdminService:
                 {"preview_url": str(details.get("preview_url") or "")},
                 asset_id=asset.id,
                 actor_id=actor,
-                actor_source="mapsi-studio",
+                actor_source=self.settings.studio_admin_jwt_issuer,
                 correlation_id=correlation_id,
                 previous_state={"status": asset.status.value},
                 new_state={"status": asset.status.value},
@@ -1103,7 +1112,7 @@ class StudioAdminService:
                 {"scheduled_at": scheduled_at.isoformat(), "publisher": "mautic_api"},
                 asset_id=asset.id,
                 actor_id=actor,
-                actor_source="mapsi-studio",
+                actor_source=self.settings.studio_admin_jwt_issuer,
                 correlation_id=correlation_id,
                 idempotency_key=idempotency_key or "",
                 previous_state={"status": asset.status.value, "scheduled_at": asset.scheduled_at.isoformat() if asset.scheduled_at else ""},
@@ -1131,7 +1140,7 @@ class StudioAdminService:
                 {"scheduled_at": asset.scheduled_at.isoformat(), "preview_url": str(details.get("preview_url") or "")},
                 asset_id=asset.id,
                 actor_id=actor,
-                actor_source="mapsi-studio",
+                actor_source=self.settings.studio_admin_jwt_issuer,
                 correlation_id=correlation_id,
                 idempotency_key=idempotency_key or "",
                 previous_state={"status": asset.status.value},
@@ -1159,11 +1168,21 @@ class StudioAdminService:
         actor: str,
         correlation_id: str,
         idempotency_key: str,
+        expected_version: int | None = None,
+        approved_content_hash: str | None = None,
     ) -> StudioAdminPublicationOperation:
         campaign, asset = self._find_asset(asset_id)
+        if campaign.workflow_kind.upper() == 'SIMPLE':
+            if expected_version is None or not approved_content_hash:
+                raise CampaignPublicationForbiddenError('SIMPLE publication requires the selected version and approved content hash.')
+            asset.assert_expected_version(expected_version)
+            if approved_content_hash != asset.approved_content_hash:
+                raise CampaignPublicationForbiddenError('The selected approval no longer matches this article.')
         if asset.channel == "oling":
+            from app.application.services.growth_publication_verification import matches_published_version
             existing = self.oling_publications.get_by_asset_hash(asset.id, asset.content_hash)
-            if existing is not None and existing.publication_status == "PUBLISHED":
+            if matches_published_version(existing, asset, 'oling_api'):
+                self.oling_publisher.publish(campaign, asset, idempotency_key=idempotency_key)
                 return self._publication_operation(
                     asset,
                     requested_action="publish",
@@ -1179,8 +1198,10 @@ class StudioAdminService:
                     use_asset_public_url_fallback=False,
                 )
         if asset.channel == "mapsi_site":
+            from app.application.services.growth_publication_verification import matches_published_version
             existing = self.mapsi_site_publications.get_by_asset_hash(asset.id, asset.content_hash)
-            if existing is not None and existing.publication_status == "PUBLISHED":
+            if matches_published_version(existing, asset, 'mapsi_site_api'):
+                self.mapsi_publisher.publish(campaign, asset, idempotency_key=idempotency_key)
                 return self._publication_operation(
                     asset,
                     requested_action="publish",
@@ -1199,16 +1220,41 @@ class StudioAdminService:
         if not readiness.get("publishable"):
             reasons = ", ".join(str(item) for item in readiness.get("reasons", []) if item)
             raise CampaignPublicationForbiddenError(f"Asset is not publishable: {reasons or 'readiness failed'}.")
+        if campaign.workflow_kind.upper() == 'SIMPLE' and asset.channel in {'oling', 'mapsi_site'}:
+            from app.infrastructure.db.models import ContentAssetModel
+            session = self.review_portal_service.campaign_repository.session
+            claimed = session.query(ContentAssetModel).filter(
+                ContentAssetModel.id == asset.id,
+                ContentAssetModel.status == AssetStatus.APPROVED.value,
+                ContentAssetModel.content_version == asset.content_version,
+                ContentAssetModel.content_hash == asset.content_hash,
+                ContentAssetModel.approved_content_hash == asset.approved_content_hash,
+            ).update({'status':AssetStatus.PUBLISHING.value}, synchronize_session=False)
+            if claimed != 1:
+                session.rollback()
+                raise CampaignPublicationForbiddenError('This article changed or its publication is already running.')
+            session.commit()
+        def execute_publication(publisher, repository):
+            try:
+                publisher.publish(campaign, asset, idempotency_key=idempotency_key)
+            except Exception as exc:
+                if campaign.workflow_kind.upper() == 'SIMPLE':
+                    receipt = repository.get_by_asset_hash(asset.id, asset.content_hash)
+                    if receipt is None or receipt.status != 'published':
+                        session.query(ContentAssetModel).filter(ContentAssetModel.id == asset.id, ContentAssetModel.status == AssetStatus.PUBLISHING.value, ContentAssetModel.content_version == asset.content_version).update({'status':AssetStatus.FAILED.value,'last_error':type(exc).__name__}, synchronize_session=False)
+                        session.commit()
+                raise
+            return publisher._serialize(repository.get_latest_for_asset(asset.id))
         if asset.channel == "oling":
-            details = self.oling_publisher.publish_asset(campaign.id, asset.id, idempotency_key=idempotency_key)
-            payload = dict(details.get("details") or {})
+            payload = execute_publication(self.oling_publisher, self.oling_publications)
+            campaign, asset = self._find_asset(asset_id)
             self.audit_repository.append(
                 campaign.id,
                 "publication.published",
                 {"external_id": str(payload.get("external_publication_id") or payload.get("external_id") or ""), "public_url": str(payload.get("external_publication_url") or payload.get("public_url") or "")},
                 asset_id=asset.id,
                 actor_id=actor,
-                actor_source="mapsi-studio",
+                actor_source=self.settings.studio_admin_jwt_issuer,
                 correlation_id=correlation_id,
                 idempotency_key=idempotency_key,
                 previous_state={"status": "APPROVED"},
@@ -1231,15 +1277,15 @@ class StudioAdminService:
                 use_asset_public_url_fallback=False,
             )
         if asset.channel == "mapsi_site":
-            details = self.mapsi_publisher.publish_asset(campaign.id, asset.id, idempotency_key=idempotency_key)
-            payload = dict(details.get("details") or {})
+            payload = execute_publication(self.mapsi_publisher, self.mapsi_site_publications)
+            campaign, asset = self._find_asset(asset_id)
             self.audit_repository.append(
                 campaign.id,
                 "publication.published",
                 {"external_id": str(payload.get("external_publication_id") or payload.get("external_id") or ""), "public_url": str(payload.get("external_publication_url") or payload.get("public_url") or "")},
                 asset_id=asset.id,
                 actor_id=actor,
-                actor_source="mapsi-studio",
+                actor_source=self.settings.studio_admin_jwt_issuer,
                 correlation_id=correlation_id,
                 idempotency_key=idempotency_key,
                 previous_state={"status": "APPROVED"},
@@ -1269,7 +1315,7 @@ class StudioAdminService:
                 {"external_id": str(details.get("linkedin_post_urn", "")), "public_url": str(details.get("linkedin_post_urn", ""))},
                 asset_id=asset.id,
                 actor_id=actor,
-                actor_source="mapsi-studio",
+                actor_source=self.settings.studio_admin_jwt_issuer,
                 correlation_id=correlation_id,
                 idempotency_key=idempotency_key,
                 previous_state={"status": "APPROVED"},
@@ -1349,6 +1395,7 @@ class StudioAdminService:
 
         return {
             "workflow_kind": campaign.workflow_kind,
+            "asset_status": asset.status.value,
             "asset_id": asset.id,
             "channel": asset.channel,
             "locale": asset.locale,
@@ -1372,6 +1419,8 @@ class StudioAdminService:
         actor: str,
         correlation_id: str,
         idempotency_key: str,
+        expected_version: int | None = None,
+        approved_content_hash: str | None = None,
     ) -> StudioAdminPublicationOperation:
         campaign, asset = self._find_asset(asset_id)
         if asset.channel not in {"oling", "mapsi_site"}:
@@ -1385,7 +1434,7 @@ class StudioAdminService:
             {},
             asset_id=asset.id,
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             idempotency_key=idempotency_key,
             previous_state={"status": "FAILED"},
@@ -1393,7 +1442,7 @@ class StudioAdminService:
             channel=asset.channel,
             result="SUCCESS",
         )
-        return self.publish_asset_operation(asset_id, actor=actor, correlation_id=correlation_id, idempotency_key=idempotency_key)
+        return self.publish_asset_operation(asset_id, actor=actor, correlation_id=correlation_id, idempotency_key=idempotency_key, expected_version=expected_version, approved_content_hash=approved_content_hash)
 
     def cancel_asset_publication(
         self,
@@ -1413,7 +1462,7 @@ class StudioAdminService:
                 {},
                 asset_id=asset.id,
                 actor_id=actor,
-                actor_source="mapsi-studio",
+                actor_source=self.settings.studio_admin_jwt_issuer,
                 correlation_id=correlation_id,
                 previous_state={"scheduled_at": previous_schedule},
                 new_state={"scheduled_at": ""},
@@ -1455,7 +1504,7 @@ class StudioAdminService:
             {"external_id": str(details.get("external_publication_id") or details.get("external_id") or "")},
             asset_id=refreshed_asset.id,
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             previous_state={"status": previous_status},
             new_state={"status": refreshed_asset.status.value},
@@ -1633,7 +1682,7 @@ class StudioAdminService:
             "configuration.channel_health_checked",
             diagnostics,
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             idempotency_key=idempotency_key or "",
             new_state={"channel": channel},
@@ -1680,7 +1729,7 @@ class StudioAdminService:
             "configuration.channel_enabled",
             {"expires_in_minutes": expires_in_minutes},
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             idempotency_key=idempotency_key or "",
             previous_state={"feature_enabled": current.feature_enabled if current is not None else self._static_channel_feature_enabled(channel)},
@@ -1722,7 +1771,7 @@ class StudioAdminService:
             "configuration.channel_disabled",
             {},
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             idempotency_key=idempotency_key or "",
             previous_state={"feature_enabled": current.feature_enabled if current is not None else self._static_channel_feature_enabled(channel)},
@@ -1765,7 +1814,7 @@ class StudioAdminService:
             "configuration.channel_kill_switch_activated",
             {},
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             idempotency_key=idempotency_key or "",
             previous_state={"emergency_kill_switch": current.emergency_kill_switch if current is not None else False},
@@ -1810,7 +1859,7 @@ class StudioAdminService:
             "configuration.channel_kill_switch_deactivated",
             {},
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             idempotency_key=idempotency_key or "",
             previous_state={"emergency_kill_switch": current.emergency_kill_switch if current is not None else False},
@@ -1850,7 +1899,7 @@ class StudioAdminService:
             "configuration.global_kill_switch_activated",
             {},
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             idempotency_key=idempotency_key or "",
             previous_state={"global_kill_switch": False},
@@ -1882,7 +1931,7 @@ class StudioAdminService:
             "configuration.global_kill_switch_deactivated",
             {},
             actor_id=actor,
-            actor_source="mapsi-studio",
+            actor_source=self.settings.studio_admin_jwt_issuer,
             correlation_id=correlation_id,
             idempotency_key=idempotency_key or "",
             previous_state={"global_kill_switch": True},
@@ -2862,6 +2911,14 @@ class StudioAdminService:
         )
 
     def _find_asset(self, asset_id: str) -> tuple[CampaignRun, ContentAsset]:
+        session = getattr(self.campaign_service.repository, 'session', None)
+        if session is not None:
+            from app.infrastructure.db.models import ContentAssetModel
+            row = session.query(ContentAssetModel.campaign_run_id).filter(ContentAssetModel.id == asset_id).first()
+            if row is not None:
+                campaign = self.campaign_service.get_campaign(row.campaign_run_id)
+                return campaign, next(asset for asset in campaign.content_assets if asset.id == asset_id)
+            raise CampaignNotFoundError(f'Asset {asset_id} not found.')
         for campaign in self.campaign_service.list_campaigns():
             for asset in campaign.content_assets:
                 if asset.id == asset_id:

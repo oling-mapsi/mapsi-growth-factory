@@ -44,7 +44,7 @@ class SimpleGenerationWorker:
                 self.service.run_generation(job.campaign_run_id, stage_callback=mark_stage)
         except Exception as exc:
             self.jobs.mark_failed(job.id, exc)
-            logger.exception("Simple generation job failed: %s", job.id)
+            logger.warning("Simple generation job failed: %s (%s)", job.id, type(exc).__name__)
             return True
         finally:
             stop.set()

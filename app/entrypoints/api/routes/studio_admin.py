@@ -961,6 +961,8 @@ def publish_asset(
                     actor=principal.actor_id,
                     correlation_id=correlation_id,
                     idempotency_key=payload.idempotency_key,
+                    expected_version=payload.expected_version,
+                    approved_content_hash=payload.approved_content_hash,
                 )
             ),
         )
@@ -1021,6 +1023,8 @@ def retry_asset_publication(
                     actor=principal.actor_id,
                     correlation_id=correlation_id,
                     idempotency_key=payload.idempotency_key,
+                    expected_version=payload.expected_version,
+                    approved_content_hash=payload.approved_content_hash,
                 )
             ),
         )

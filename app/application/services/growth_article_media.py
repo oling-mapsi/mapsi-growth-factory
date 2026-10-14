@@ -4,15 +4,20 @@ from bs4 import BeautifulSoup
 def attach_illustration(html: str, *, asset_id: str, alt: str, placement: str = "after_intro") -> str:
     soup = BeautifulSoup(html, "html.parser")
     url = f"/studio-simple/assets/{asset_id}/image"
+    caption = None
     for image in soup.find_all("img", src=url):
         parent = image.parent
         if parent.name == "figure":
+            if caption is None and parent.find('figcaption'):
+                caption = parent.find('figcaption').extract()
             parent.decompose()
         else:
             image.decompose()
     figure = soup.new_tag("figure")
     image = soup.new_tag("img", src=url, alt=alt, loading="lazy")
     figure.append(image)
+    if caption is not None:
+        figure.append(caption)
     if placement == "end":
         soup.append(figure)
     else:

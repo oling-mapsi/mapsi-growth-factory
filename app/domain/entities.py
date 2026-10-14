@@ -912,11 +912,20 @@ class CampaignRun:
         return decision
 
     def publish(self, publication: Publication) -> None:
-        if self.status not in {CampaignStatus.APPROVED, CampaignStatus.PARTIALLY_PUBLISHED, CampaignStatus.PUBLISHED}:
+        publication_asset_id = getattr(publication, "content_asset_id", "")
+        if self.workflow_kind.upper() == 'SIMPLE':
+            if not publication_asset_id:
+                raise CampaignPublicationForbiddenError('SIMPLE publication requires an exact asset.')
+            asset = self._find_asset(publication_asset_id)
+            asset.ensure_content_hash()
+            quality = dict((asset.results or {}).get('editorial_quality') or {})
+            blocking = any(isinstance(issue, dict) and issue.get('severity') in {'error', 'blocking'} for issue in quality.get('issues', []))
+            if asset.channel != publication.channel or asset.status not in {AssetStatus.APPROVED, AssetStatus.PUBLISHED} or not asset.approved_content_hash or asset.approved_content_hash != asset.content_hash or (quality and not quality.get('passed')) or blocking:
+                raise CampaignPublicationForbiddenError('SIMPLE publication requires an individually approved, unchanged asset without blocking quality issues.')
+        elif self.status not in {CampaignStatus.APPROVED, CampaignStatus.PARTIALLY_PUBLISHED, CampaignStatus.PUBLISHED}:
             raise CampaignPublicationForbiddenError(
                 f"Campaign {self.id} must be APPROVED before publication."
             )
-        publication_asset_id = getattr(publication, "content_asset_id", "")
         for existing in self.publications:
             if publication_asset_id:
                 if existing.channel == publication.channel and existing.content_asset_id == publication_asset_id:
