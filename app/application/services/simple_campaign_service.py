@@ -22,6 +22,8 @@ from app.application.ports.connectors import PublisherPort
 from app.application.ports.repositories import CampaignRepositoryPort
 from app.application.ports.tasks import TaskQueuePort
 from app.application.services.editorial_engine_v1 import EditorialGenerationService
+from app.application.services.growth_image_generation import GrowthImageGenerationService
+from app.application.services.growth_seo_geo import GrowthSeoGeoService
 from app.application.services.html_sanitizer import HtmlSanitizer
 from app.core.config import get_settings
 from app.domain.entities import CampaignRun, ContentAsset, EditorialBrief, ProductChange, Publication, SourceEvidence
@@ -55,6 +57,7 @@ class CreateSimpleCampaignCommand:
     campaign_type: str
     selected_channels: list[str]
     theme: str = ""
+    brief: str = ""
 
 
 @dataclass
@@ -62,6 +65,12 @@ class UpdateSimpleAssetCommand:
     title: str | None = None
     content_html: str | None = None
     content_text: str | None = None
+    expected_version: int | None = None
+
+
+@dataclass
+class GenerateSimpleImageCommand:
+    visual_brief: str = ""
     expected_version: int | None = None
 
 
@@ -154,6 +163,8 @@ class SimpleCampaignService:
         editorial_service: EditorialGenerationService | None = None,
         knowledge_repository: KnowledgeRepository | None = None,
         source_pack_repository: EditorialSourcePackRepository | None = None,
+        image_service: GrowthImageGenerationService | None = None,
+        seo_geo_service: GrowthSeoGeoService | None = None,
         require_real_editorial_backend: bool = False,
     ) -> None:
         self.repository = repository
@@ -164,6 +175,8 @@ class SimpleCampaignService:
         self.editorial_service = editorial_service
         self.knowledge_repository = knowledge_repository
         self.source_pack_repository = source_pack_repository
+        self.image_service = image_service
+        self.seo_geo_service = seo_geo_service or GrowthSeoGeoService()
         self.require_real_editorial_backend = require_real_editorial_backend
 
     def create_campaign(self, command: CreateSimpleCampaignCommand) -> CampaignRun:
@@ -173,7 +186,7 @@ class SimpleCampaignService:
         theme = self._resolve_theme(campaign_type, command.theme)
         campaign = CampaignRun(
             name=command.name.strip(),
-            objective=theme,
+            objective=command.brief.strip() or theme,
             theme=theme,
             campaign_type=campaign_type,
             workflow_kind=SIMPLE_WORKFLOW_KIND,
@@ -184,6 +197,76 @@ class SimpleCampaignService:
             saved.id,
             "simple_campaign.created",
             {"campaign_type": saved.campaign_type, "theme": saved.theme, "selected_channels": saved.selected_channels},
+            actor_source="studio-simple",
+            previous_state={},
+            new_state={"status": saved.status.value},
+            result="SUCCESS",
+        )
+        return saved
+
+    def generate_asset_image(self, campaign_id: str, asset_id: str, command: GenerateSimpleImageCommand) -> CampaignRun:
+        if self.image_service is None:
+            raise InvalidStateTransitionError("Image generation is not configured.")
+        campaign = self.get_campaign(campaign_id)
+        asset = self._find_asset(campaign, asset_id)
+        if command.expected_version is not None:
+            asset.assert_expected_version(command.expected_version)
+        external_channel = self.external_channel(asset.channel)
+        result = self.image_service.generate(
+            channel=external_channel,
+            title=asset.title,
+            content_text=asset.content_text,
+            visual_brief=command.visual_brief or str((asset.results or {}).get("illustration_suggestion", "")),
+        )
+        asset.results = dict(asset.results or {})
+        asset.results["image"] = {
+            "model": result.model,
+            "prompt": result.prompt,
+            "alt_text": result.alt_text,
+            "storage_path": result.storage_path,
+            "data_url": result.data_url,
+            "output_format": result.output_format,
+            "duration_ms": result.duration_ms,
+            "tokens": result.tokens,
+        }
+        saved = self.repository.save(campaign)
+        self.audit_log.append(
+            saved.id,
+            "simple_campaign.asset_image_generated",
+            {"asset_id": asset_id, "channel": asset.channel, "model": result.model, "storage_path": result.storage_path},
+            actor_source="studio-simple",
+            previous_state={},
+            new_state={"status": saved.status.value},
+            result="SUCCESS",
+        )
+        return saved
+
+    def prepare_asset_seo_geo(self, campaign_id: str, asset_id: str, expected_version: int | None = None) -> CampaignRun:
+        campaign = self.get_campaign(campaign_id)
+        asset = self._find_asset(campaign, asset_id)
+        if expected_version is not None:
+            asset.assert_expected_version(expected_version)
+        image = dict((asset.results or {}).get("image") or {})
+        result = self.seo_geo_service.prepare(
+            channel=self.external_channel(asset.channel),
+            title=asset.title,
+            html=asset.content_html or asset.body,
+            text=asset.content_text,
+            image_alt=str(image.get("alt_text") or ""),
+        )
+        asset.results = dict(asset.results or {})
+        asset.results["seo_geo"] = {
+            "status": result.status,
+            "checks": result.checks,
+            "metadata": result.metadata,
+            "internal_links": result.internal_links,
+        }
+        asset.update_draft(content_html=HtmlSanitizer.sanitize(result.html), content_text=asset.content_text)
+        saved = self.repository.save(campaign)
+        self.audit_log.append(
+            saved.id,
+            "simple_campaign.asset_seo_geo_prepared",
+            {"asset_id": asset_id, "channel": asset.channel, "status": result.status, "link_count": len(result.internal_links)},
             actor_source="studio-simple",
             previous_state={},
             new_state={"status": saved.status.value},
@@ -745,6 +828,7 @@ class SimpleCampaignService:
     ) -> str:
         sections = [
             f"Theme campagne: {campaign.theme}",
+            f"Brief utilisateur: {campaign.objective}" if campaign.objective and campaign.objective != campaign.theme else "",
             f"Type campagne: {campaign.campaign_type}",
             f"Destination editoriale: {destination_site}",
             f"Feature MAPSI: {feature.title} ({feature.module})",
@@ -770,6 +854,7 @@ class SimpleCampaignService:
     def _build_oling_context_digest(self, campaign: CampaignRun, practice: OlingPractice) -> str:
         sections = [
             f"Theme campagne: {campaign.theme}",
+            f"Brief utilisateur: {campaign.objective}" if campaign.objective and campaign.objective != campaign.theme else "",
             f"Type campagne: {campaign.campaign_type}",
             f"Practice OLING: {practice.title}",
             f"Description practice: {practice.description}",

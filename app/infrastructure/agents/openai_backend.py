@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from app.application.models.editorial_agents import EditorialExecutionMetadata, EditorialTokenUsage
 from app.application.ports.editorial_agents import EditorialRunResult, OutputModelT, StructuredAgentBackendPort
+from app.core.config import get_settings
 
 
 class OpenAIAgentsBackend(StructuredAgentBackendPort):
@@ -24,12 +25,21 @@ class OpenAIAgentsBackend(StructuredAgentBackendPort):
             from agents import Agent, ModelSettings, Runner
         except ImportError as exc:
             raise RuntimeError("OpenAI Agents SDK is not installed.") from exc
+        settings = get_settings()
+        model_settings_kwargs = {}
+        if not model_name.startswith("gpt-6"):
+            model_settings_kwargs["temperature"] = temperature
+        if hasattr(ModelSettings, "model_fields") and "reasoning" in getattr(ModelSettings, "model_fields", {}):
+            model_settings_kwargs["reasoning"] = {"effort": settings.editorial_agent_reasoning_effort}
+        elif hasattr(ModelSettings, "model_fields") and "reasoning_effort" in getattr(ModelSettings, "model_fields", {}):
+            model_settings_kwargs["reasoning_effort"] = settings.editorial_agent_reasoning_effort
+
         agent = Agent(
             name=agent_name,
             instructions=prompt,
             output_type=output_type,
             model=model_name,
-            model_settings=ModelSettings(temperature=temperature),
+            model_settings=ModelSettings(**model_settings_kwargs),
         )
         result = Runner.run_sync(agent, input=input_model.model_dump_json())
         output = output_type.model_validate(result.final_output)
@@ -53,7 +63,10 @@ class OpenAIAgentsBackend(StructuredAgentBackendPort):
                 model_name=model_name,
                 prompt_version=prompt_version,
                 schema_name=output_type.__name__,
-                execution_params={"temperature": temperature},
+                execution_params={
+                    "temperature": None if model_name.startswith("gpt-6") else temperature,
+                    "reasoning_effort": settings.editorial_agent_reasoning_effort if model_name.startswith("gpt-6") else None,
+                },
                 token_usage=token_usage,
             ),
         )

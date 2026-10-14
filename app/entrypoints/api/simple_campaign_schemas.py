@@ -9,6 +9,7 @@ class SimpleCampaignCreateRequest(BaseModel):
     name: str
     campaign_type: str
     theme: str = ""
+    brief: str = ""
     selected_channels: list[str] = Field(default_factory=list)
 
 
@@ -25,6 +26,15 @@ class SimpleAssetUpdateRequest(BaseModel):
 
 class SimpleAssetDecisionRequest(BaseModel):
     comment: str = ""
+    expected_version: int | None = None
+
+
+class SimpleAssetImageRequest(BaseModel):
+    visual_brief: str = ""
+    expected_version: int | None = None
+
+
+class SimpleAssetSeoGeoRequest(BaseModel):
     expected_version: int | None = None
 
 
@@ -46,6 +56,8 @@ class SimpleAssetResponse(BaseModel):
     excerpt: str
     call_to_action: str
     illustration_suggestion: str
+    image: dict = Field(default_factory=dict)
+    seo_geo: dict = Field(default_factory=dict)
     status: str
     version: int
     approved_by: str
@@ -60,6 +72,7 @@ class SimpleCampaignResponse(BaseModel):
     name: str
     campaign_type: str
     theme: str
+    brief: str
     status: str
     selected_channels: list[str]
     created_at: datetime

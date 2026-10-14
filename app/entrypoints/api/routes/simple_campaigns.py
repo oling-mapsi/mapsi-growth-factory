@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.application.services.simple_campaign_service import (
     ApproveSimpleAssetCommand,
     CreateSimpleCampaignCommand,
+    GenerateSimpleImageCommand,
     PublishSimpleCampaignCommand,
     ReviewSimpleAssetCommand,
     SimpleCampaignService,
@@ -16,6 +17,8 @@ from app.entrypoints.api.dependencies import get_simple_campaign_service
 from app.entrypoints.api.simple_campaign_schemas import (
     OlingThemeCatalogResponse,
     SimpleAssetDecisionRequest,
+    SimpleAssetImageRequest,
+    SimpleAssetSeoGeoRequest,
     SimpleAssetResponse,
     SimpleAssetUpdateRequest,
     SimpleCampaignCreateRequest,
@@ -41,6 +44,7 @@ def _response(service: SimpleCampaignService, campaign) -> SimpleCampaignRespons
         name=campaign.name,
         campaign_type=campaign.campaign_type,
         theme=campaign.theme,
+        brief=campaign.objective if campaign.objective != campaign.theme else "",
         status=service.simple_status(campaign),
         selected_channels=list(campaign.selected_channels or []),
         created_at=campaign.created_at,
@@ -56,6 +60,8 @@ def _response(service: SimpleCampaignService, campaign) -> SimpleCampaignRespons
                 excerpt=item.excerpt,
                 call_to_action=item.call_to_action,
                 illustration_suggestion=str((item.results or {}).get("illustration_suggestion", "")),
+                image=dict((item.results or {}).get("image") or {}),
+                seo_geo=dict((item.results or {}).get("seo_geo") or {}),
                 status=service.simple_asset_status(item),
                 version=item.content_version,
                 approved_by=item.approved_by,
@@ -95,6 +101,7 @@ def create_campaign(
                 name=payload.name,
                 campaign_type=payload.campaign_type,
                 theme=payload.theme,
+                brief=payload.brief,
                 selected_channels=payload.selected_channels,
             )
         )
@@ -192,6 +199,41 @@ def approve_asset(
                 ApproveSimpleAssetCommand(comment=payload.comment, expected_version=payload.expected_version, actor=principal.actor_id),
             ),
         )
+    except DomainError as exc:
+        raise _to_http_error(exc) from exc
+
+
+@router.post("/campaigns/{campaign_id}/assets/{asset_id}/image", response_model=SimpleCampaignResponse)
+def generate_asset_image(
+    campaign_id: str,
+    asset_id: str,
+    payload: SimpleAssetImageRequest,
+    principal: StudioAdminPrincipal = Depends(require_studio_admin_permission(GROWTH_REVIEW)),
+    service: SimpleCampaignService = Depends(get_simple_campaign_service),
+) -> SimpleCampaignResponse:
+    try:
+        return _response(
+            service,
+            service.generate_asset_image(
+                campaign_id,
+                asset_id,
+                GenerateSimpleImageCommand(visual_brief=payload.visual_brief, expected_version=payload.expected_version),
+            ),
+        )
+    except DomainError as exc:
+        raise _to_http_error(exc) from exc
+
+
+@router.post("/campaigns/{campaign_id}/assets/{asset_id}/seo-geo", response_model=SimpleCampaignResponse)
+def prepare_asset_seo_geo(
+    campaign_id: str,
+    asset_id: str,
+    payload: SimpleAssetSeoGeoRequest,
+    principal: StudioAdminPrincipal = Depends(require_studio_admin_permission(GROWTH_REVIEW)),
+    service: SimpleCampaignService = Depends(get_simple_campaign_service),
+) -> SimpleCampaignResponse:
+    try:
+        return _response(service, service.prepare_asset_seo_geo(campaign_id, asset_id, expected_version=payload.expected_version))
     except DomainError as exc:
         raise _to_http_error(exc) from exc
 

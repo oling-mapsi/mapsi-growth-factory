@@ -25,6 +25,8 @@ from app.application.services.editorial_agents import (
     WebsiteArticleWriterAgent,
 )
 from app.application.services.github_intelligence_service import GitHubIntelligenceService
+from app.application.services.growth_image_generation import GrowthImageGenerationService
+from app.application.services.growth_seo_geo import GrowthSeoGeoService
 from app.application.services.mapsi_product_changes_service import MapsiProductChangesService
 from app.application.services.mapsi_usage_collection_service import MapsiUsageCollectionService
 from app.application.services.mautic_contact_sync_service import MauticContactSyncService
@@ -204,6 +206,8 @@ def get_simple_campaign_service(session: Session = Depends(get_db_session)) -> S
         editorial_service=build_editorial_generation_service(session, force_mode="real" if generator_mode == "openai" else "simulated"),
         knowledge_repository=KnowledgeRepository(session),
         source_pack_repository=EditorialSourcePackRepository(session),
+        image_service=GrowthImageGenerationService(project_root=Path(__file__).resolve().parents[3]),
+        seo_geo_service=GrowthSeoGeoService(),
         require_real_editorial_backend=generator_mode == "openai",
     )
 
