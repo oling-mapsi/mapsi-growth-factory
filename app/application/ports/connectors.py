@@ -19,7 +19,31 @@ class CampaignGeneratorPort(ABC):
 
 class PublisherPort(ABC):
     @abstractmethod
-    def publish(self, campaign: CampaignRun, channel: str) -> Publication:
+    def validate_configuration(self, channel: str) -> dict:
+        raise NotImplementedError
+
+    @abstractmethod
+    def create_preview(self, campaign: CampaignRun, asset: ContentAsset) -> dict:
+        raise NotImplementedError
+
+    @abstractmethod
+    def publish(self, campaign: CampaignRun, asset: ContentAsset) -> Publication:
+        raise NotImplementedError
+
+    @abstractmethod
+    def update(self, campaign: CampaignRun, asset: ContentAsset) -> Publication:
+        raise NotImplementedError
+
+    @abstractmethod
+    def unpublish(self, campaign: CampaignRun, asset: ContentAsset) -> bool:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_publication_status(self, campaign: CampaignRun, asset: ContentAsset) -> dict:
+        raise NotImplementedError
+
+    @abstractmethod
+    def collect_metrics(self, campaign: CampaignRun, asset: ContentAsset) -> dict:
         raise NotImplementedError
 
 

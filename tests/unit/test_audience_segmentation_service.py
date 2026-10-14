@@ -140,8 +140,9 @@ def test_inactive_30_days_boundary(session) -> None:
     preview = service(session).preview_segment("inactive_30_days", persist=False)
 
     assert preview.eligible_volume == 1
-    assert preview.audits[0].included is False
-    assert preview.audits[1].included is True
+    by_user = {session.get(ContactMembershipModel, audit.membership_id).external_user_id: audit for audit in preview.audits}
+    assert by_user['u1'].included is False
+    assert by_user['u2'].included is True
 
 
 def test_max_threshold_blocks_large_audience(session) -> None:

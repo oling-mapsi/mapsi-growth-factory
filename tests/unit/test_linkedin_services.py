@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.config import get_settings
 from app.application.services.linkedin_metrics_collector import LinkedInMetricsCollector
 from app.application.services.linkedin_oauth_service import LinkedInOAuthService
 from app.application.services.linkedin_organization_resolver import LinkedInOrganizationResolver
@@ -19,6 +20,9 @@ from app.mock_linkedin_server import app as linkedin_mock_app
 
 
 def build_services(session):
+    settings = get_settings()
+    settings.publish_linkedin_enabled = True
+    settings.workflow_kill_switch = False
     config = build_linkedin_config()
     config.base_url = "http://testserver"
     config.mode = "mock"
@@ -126,3 +130,17 @@ def test_linkedin_logs_do_not_expose_token(session, caplog) -> None:
         publisher.publish_asset(campaign.id, campaign.content_assets[0].id, idempotency_key="li-log")
 
     assert "mock-token-" not in caplog.text
+
+
+def test_linkedin_publish_is_blocked_in_pilot_mode(session, monkeypatch) -> None:
+    monkeypatch.setenv("GROWTH_OPERATION_MODE", "pilot")
+    get_settings.cache_clear()
+    _, oauth_service, publisher, _ = build_services(session)
+    oauth_service.exchange_code("seed")
+    campaign = seed_campaign(session)
+
+    with pytest.raises(CampaignPublicationForbiddenError, match="pilot mode"):
+        publisher.publish_asset(campaign.id, campaign.content_assets[0].id, idempotency_key="li-pilot-1")
+
+    monkeypatch.delenv("GROWTH_OPERATION_MODE", raising=False)
+    get_settings.cache_clear()

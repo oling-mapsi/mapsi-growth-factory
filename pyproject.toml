@@ -9,12 +9,15 @@ description = "MAPSI Growth Factory API"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "beautifulsoup4>=4.12,<5.0",
   "alembic>=1.13,<2.0",
   "fastapi>=0.116,<1.0",
   "httpx>=0.27,<1.0",
   "jsonschema>=4.23,<5.0",
+  "openai-agents>=0.17.4,<1.0",
   "python-dateutil>=2.9,<3.0",
   "PyJWT>=2.9,<3.0",
+  "PyMySQL>=1.1,<2.0",
   "psycopg[binary]>=3.2,<4.0",
   "pydantic-settings>=2.3,<3.0",
   "pyyaml>=6.0,<7.0",
@@ -36,6 +39,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
   "postgres: tests d'integration PostgreSQL",
+  "mysql: tests d'integration MySQL",
 ]
 
 [tool.setuptools.packages.find]

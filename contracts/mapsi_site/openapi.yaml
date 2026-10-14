@@ -1,0 +1,503 @@
+openapi: 3.1.0
+info:
+  title: MAPSI Growth News API
+  version: 1.0.0
+  description: |
+    Contrat stable du canal `mapsi_site`. Il reflète le comportement réellement implémenté dans `mapsi_web` au 12 juillet 2026.
+
+    Contraintes de version :
+    - pas de versionnement dans l'URL ;
+    - les champs documentés sont stables ;
+    - les ajouts futurs doivent être additifs ;
+    - aucune contrainte de verrou optimiste n'est implémentée aujourd'hui ;
+    - une mise à jour d'un article publié repasse l'article en statut `draft` jusqu'à la prochaine publication.
+servers:
+  - url: https://mapsi.fr
+security:
+  - bearerAuth: []
+tags:
+  - name: Growth News
+paths:
+  /api/growth/news:
+    post:
+      tags: [Growth News]
+      operationId: createDraft
+      summary: Crée un brouillon ou relit le brouillon existant du même `external_id`
+      description: |
+        Authentification par bearer token `MAPSI_GROWTH_NEWS_PUBLISHER_TOKEN`.
+        Cette opération est idempotente au niveau contenu : rejouer exactement le même payload ne crée pas un nouveau numéro de version.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrowthDraftPayload'
+            examples:
+              default:
+                value:
+                  external_id: asset-123
+                  title: MAPSI studio pilote la publication Growth
+                  slug: mapsi-studio-pilote-publication-growth
+                  excerpt: Un article de test.
+                  content_html: "<p>Contenu draft</p>"
+                  meta_title: Meta MAPSI
+                  meta_description: Description META
+                  canonical_url: ""
+                  categories: [growth]
+                  tags: [mapsi, growth]
+                  author_display_name: Growth Factory
+                  source_campaign_id: cmp-1
+                  publication_date: "2026-07-12T09:00:00+00:00"
+      responses:
+        '201':
+          description: Brouillon créé
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrowthArticleResponse'
+        '200':
+          description: Brouillon déjà existant, mis à jour ou relu
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrowthArticleResponse'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+        '403':
+          $ref: '#/components/responses/AuthenticationInvalid'
+        '422':
+          $ref: '#/components/responses/InvalidContent'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/growth/news/{externalId}:
+    get:
+      tags: [Growth News]
+      operationId: getArticleStatus
+      summary: Lit l'état d'un article par `growth_external_id`
+      parameters:
+        - $ref: '#/components/parameters/ExternalId'
+      responses:
+        '200':
+          description: Etat courant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrowthArticleResponse'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+        '403':
+          $ref: '#/components/responses/AuthenticationInvalid'
+        '404':
+          $ref: '#/components/responses/ArticleNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [Growth News]
+      operationId: updateDraft
+      summary: Met à jour un brouillon existant
+      description: |
+        `external_id` dans le corps doit exactement correspondre au paramètre de route.
+        Si l'article était publié, la mise à jour le remet en statut `draft` tant qu'une nouvelle publication n'a pas eu lieu.
+      parameters:
+        - $ref: '#/components/parameters/ExternalId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrowthDraftPayload'
+      responses:
+        '200':
+          description: Brouillon mis à jour
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrowthArticleResponse'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+        '403':
+          $ref: '#/components/responses/AuthenticationInvalid'
+        '404':
+          $ref: '#/components/responses/ArticleNotFound'
+        '422':
+          $ref: '#/components/responses/InvalidContent'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/growth/news/{externalId}/preview-url:
+    post:
+      tags: [Growth News]
+      operationId: createPreview
+      summary: Crée ou régénère une URL de preview
+      description: |
+        Retourne une URL HTML signée vers la preview publique.
+        Le token brut n'est jamais renvoyé séparément.
+      parameters:
+        - $ref: '#/components/parameters/ExternalId'
+      responses:
+        '200':
+          description: URL de preview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrowthPreviewResponse'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+        '403':
+          $ref: '#/components/responses/AuthenticationInvalid'
+        '404':
+          $ref: '#/components/responses/ArticleNotFound'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /preview/actualites/{slug}:
+    get:
+      tags: [Growth News]
+      operationId: readPreviewHtml
+      summary: Lit la preview HTML réelle
+      description: |
+        Route publique sans bearer token.
+        Le paramètre `token` est obligatoire.
+        En cas de token invalide ou expiré, l'implémentation actuelle retourne volontairement `404` HTML sans code d'erreur JSON pour éviter de divulguer l'existence de la preview.
+      security: []
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Page de preview
+          content:
+            text/html:
+              schema:
+                type: string
+        '404':
+          description: Preview introuvable, token invalide ou token expiré
+  /api/growth/news/{externalId}/publish:
+    post:
+      tags: [Growth News]
+      operationId: publishArticle
+      summary: Publie la dernière version brouillon
+      description: |
+        Supporte l'en-tête optionnel `Idempotency-Key`.
+        Comportement réel actuel :
+        - si l'article est déjà publié et n'a pas de brouillon en attente, la route rejoue la dernière publication avec `idempotent_replay=true` ;
+        - sinon la publication est exécutée et `idempotent_replay=false`.
+      parameters:
+        - $ref: '#/components/parameters/ExternalId'
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            maxLength: 255
+      responses:
+        '200':
+          description: Article publié ou replay idempotent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrowthArticleResponse'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+        '403':
+          $ref: '#/components/responses/AuthenticationInvalid'
+        '404':
+          $ref: '#/components/responses/ArticleNotFound'
+        '409':
+          oneOf:
+            - $ref: '#/components/responses/PublicationNotAllowed'
+            - $ref: '#/components/responses/VersionConflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/growth/news/{externalId}/unpublish:
+    post:
+      tags: [Growth News]
+      operationId: unpublishArticle
+      summary: Dépublie un article publié
+      parameters:
+        - $ref: '#/components/parameters/ExternalId'
+      responses:
+        '200':
+          description: Article dépublié
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrowthArticleResponse'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+        '403':
+          $ref: '#/components/responses/AuthenticationInvalid'
+        '404':
+          $ref: '#/components/responses/ArticleNotFound'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+  parameters:
+    ExternalId:
+      name: externalId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 191
+  schemas:
+    GrowthDraftPayload:
+      type: object
+      additionalProperties: false
+      required:
+        - external_id
+        - title
+        - content_html
+      properties:
+        external_id:
+          type: string
+        title:
+          type: string
+        slug:
+          type: string
+        excerpt:
+          type: string
+        content_html:
+          type: string
+        meta_title:
+          type: string
+        meta_description:
+          type: string
+        canonical_url:
+          type: string
+        featured_image:
+          type: string
+          nullable: true
+        categories:
+          type: array
+          items:
+            type: string
+        tags:
+          type: array
+          items:
+            type: string
+        author_display_name:
+          type: string
+        source_campaign_id:
+          type: string
+          nullable: true
+        publication_date:
+          type: string
+          format: date-time
+    GrowthArticleResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - growth_external_id
+        - article_id
+        - version
+        - status
+        - slug
+        - updated_at
+        - idempotent_replay
+        - correlation_id
+        - has_pending_draft
+      properties:
+        growth_external_id:
+          type: string
+        article_id:
+          type: integer
+        version:
+          type: integer
+        published_version:
+          type: integer
+          nullable: true
+        status:
+          type: string
+          enum: [draft, published, unpublished]
+        slug:
+          type: string
+        preview_url:
+          type: string
+          nullable: true
+        public_url:
+          type: string
+          nullable: true
+        published_at:
+          type: string
+          format: date-time
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+        idempotent_replay:
+          type: boolean
+        correlation_id:
+          type: string
+        has_pending_draft:
+          type: boolean
+    GrowthPreviewResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - growth_external_id
+        - article_id
+        - version
+        - status
+        - slug
+        - preview_url
+        - expires_at
+        - updated_at
+        - idempotent_replay
+        - correlation_id
+      properties:
+        growth_external_id:
+          type: string
+        article_id:
+          type: integer
+        version:
+          type: integer
+        status:
+          type: string
+          enum: [draft, published, unpublished]
+        slug:
+          type: string
+        preview_url:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        idempotent_replay:
+          type: boolean
+        correlation_id:
+          type: string
+    GrowthErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, correlation_id, details]
+          properties:
+            code:
+              type: string
+              enum:
+                - AUTHENTICATION_REQUIRED
+                - AUTHENTICATION_INVALID
+                - ARTICLE_NOT_FOUND
+                - INVALID_CONTENT
+                - VERSION_CONFLICT
+                - PREVIEW_TOKEN_INVALID
+                - PREVIEW_TOKEN_EXPIRED
+                - PUBLICATION_NOT_ALLOWED
+                - UNPUBLISH_NOT_SUPPORTED
+                - INTERNAL_ERROR
+            message:
+              type: string
+            correlation_id:
+              type: string
+            details:
+              type: object
+  responses:
+    AuthenticationRequired:
+      description: Bearer token manquant
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GrowthErrorEnvelope'
+          example:
+            error:
+              code: AUTHENTICATION_REQUIRED
+              message: Missing bearer token.
+              correlation_id: 7f7aab12b8c5d4e1
+              details: {}
+    AuthenticationInvalid:
+      description: Bearer token invalide
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GrowthErrorEnvelope'
+          example:
+            error:
+              code: AUTHENTICATION_INVALID
+              message: Invalid bearer token.
+              correlation_id: 7f7aab12b8c5d4e1
+              details: {}
+    ArticleNotFound:
+      description: Article introuvable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GrowthErrorEnvelope'
+          example:
+            error:
+              code: ARTICLE_NOT_FOUND
+              message: Article not found.
+              correlation_id: 7f7aab12b8c5d4e1
+              details: {}
+    InvalidContent:
+      description: Payload invalide
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GrowthErrorEnvelope'
+          example:
+            error:
+              code: INVALID_CONTENT
+              message: content_html is invalid.
+              correlation_id: 7f7aab12b8c5d4e1
+              details:
+                fields:
+                  content_html: content_html is invalid.
+    VersionConflict:
+      description: Etat incompatible avec l'opération demandée
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GrowthErrorEnvelope'
+          example:
+            error:
+              code: VERSION_CONFLICT
+              message: No draft available for preview.
+              correlation_id: 7f7aab12b8c5d4e1
+              details: {}
+    PublicationNotAllowed:
+      description: Publication impossible dans l'état courant
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GrowthErrorEnvelope'
+          example:
+            error:
+              code: PUBLICATION_NOT_ALLOWED
+              message: No draft available for publication.
+              correlation_id: 7f7aab12b8c5d4e1
+              details: {}
+    InternalError:
+      description: Erreur interne générique
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GrowthErrorEnvelope'
+          example:
+            error:
+              code: INTERNAL_ERROR
+              message: Internal error.
+              correlation_id: 7f7aab12b8c5d4e1
+              details: {}

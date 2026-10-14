@@ -86,6 +86,7 @@ class AudienceSegmentationRepository:
             created_at=preview.created_at,
         )
         self.session.add(model)
+        self.session.flush()
         for audit in preview.audits:
             self.session.add(
                 AudienceSegmentAuditModel(

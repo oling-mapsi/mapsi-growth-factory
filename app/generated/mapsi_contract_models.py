@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class HealthStatus(BaseModel):
@@ -70,13 +70,26 @@ class ContactSnapshotPage(BaseModel):
 
 
 class ProductChange(BaseModel):
-    change_id: str
-    version: str
-    deployed_at: str
-    capability_key: str
-    summary: str
-    audience_hint: str | None = None
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    title: str
+    summary: str | None = None
+    url: str | None = None
+    published_at: str | None = None
+    tags: list[str] | None = None
+    communicable: bool | None = None
+    module: str | None = None
+    status: str | None = None
+    audiences: list[str] | None = None
+    user_value: str | None = None
+    functional_description: str | None = None
+    minimum_version: str | None = None
+    deployed_at: str | None = None
+    evidence: dict | None = None
 
 
 class ProductChangeCollection(BaseModel):
-    changes: list[ProductChange]
+    contract_version: str
+    generated_at: str
+    items: list[ProductChange]

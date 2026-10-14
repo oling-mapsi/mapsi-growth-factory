@@ -1,12 +1,15 @@
 {
-  "changes": [
+  "contract_version": "1.0.0",
+  "generated_at": "2026-07-11T15:00:00+00:00",
+  "items": [
     {
-      "change_id": "chg_2026_07_001",
-      "version": "1.2.0",
-      "deployed_at": "2026-07-10T20:00:00Z",
-      "capability_key": "planning-dashboard",
-      "summary": "Synthetic example of a delivered capability.",
-      "audience_hint": "project-managers"
+      "id": "MAPSI-2026-010",
+      "title": "Export des indicateurs du tableau utilisateur",
+      "summary": "Les responsables peuvent exporter les indicateurs visibles depuis le tableau utilisateur sans retraitement manuel.",
+      "url": "https://github.com/oling-mapsi/mapsi-v6/pull/2101",
+      "published_at": "2026-07-01T00:00:00Z",
+      "tags": ["product", "release", "dashboard"],
+      "communicable": true
     }
   ]
 }

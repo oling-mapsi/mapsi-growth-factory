@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # MAPSI Growth Factory
 
 Socle technique FastAPI pour orchestrer des campagnes marketing en architecture hexagonale, sans connexion réelle aux systèmes externes.
@@ -401,6 +400,3 @@ alembic upgrade head
 - Connecteurs externes simulés uniquement.
 - Les workers asynchrones consommant Redis restent à brancher côté runtime.
 - Les tests PostgreSQL nécessitent Docker disponible sur la machine d’exécution.
-=======
-# mapsi-growth-factory
->>>>>>> origin/main

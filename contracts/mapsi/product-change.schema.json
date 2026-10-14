@@ -3,21 +3,32 @@
   "title": "ProductChangeCollection",
   "type": "object",
   "additionalProperties": false,
-  "required": ["changes"],
+  "required": ["contract_version", "generated_at", "items"],
   "properties": {
-    "changes": {
+    "contract_version": {
+      "type": "string"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "items": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["change_id", "version", "deployed_at", "capability_key", "summary"],
+        "required": ["id", "title", "summary", "url", "published_at", "tags", "communicable"],
         "properties": {
-          "change_id": {"type": "string"},
-          "version": {"type": "string"},
-          "deployed_at": {"type": "string", "format": "date-time"},
-          "capability_key": {"type": "string"},
+          "id": {"type": "string"},
+          "title": {"type": "string"},
           "summary": {"type": "string"},
-          "audience_hint": {"type": "string"}
+          "url": {"type": ["string", "null"]},
+          "published_at": {"type": ["string", "null"], "format": "date-time"},
+          "tags": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "communicable": {"type": "boolean"}
         }
       }
     }

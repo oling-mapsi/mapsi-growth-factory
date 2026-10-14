@@ -6,8 +6,12 @@ import pytest
 
 from app.application.services.editorial_agents import (
     LinkedInWriterAgent,
+    MapsiArticleWriter,
+    MapsiStudioContentWriter,
+    MapsiUserEmailWriter,
     MarketEditorialStrategyAgent,
     NewsletterWriterAgent,
+    OlingArticleWriter,
     SeoQualityAgent,
     WebsiteArticleWriterAgent,
 )
@@ -75,8 +79,8 @@ def seed_campaign(session) -> str:
     return campaign.id
 
 
-def build_service(session, responses) -> MultichannelContentService:
-    backend = FakeStructuredAgentBackend(responses)
+def build_service(session, responses, *, provider_type: str = "fake") -> MultichannelContentService:
+    backend = FakeStructuredAgentBackend(responses, provider_type=provider_type)
     repository = SqlAlchemyCampaignRepository(session)
     audit_log = SqlAlchemyAuditLogRepository(session)
     return MultichannelContentService(
@@ -86,6 +90,10 @@ def build_service(session, responses) -> MultichannelContentService:
         newsletter_writer=NewsletterWriterAgent(backend),
         linkedin_writer=LinkedInWriterAgent(backend),
         website_writer=WebsiteArticleWriterAgent(backend),
+        mapsi_user_email_writer=MapsiUserEmailWriter(backend),
+        oling_writer=OlingArticleWriter(backend),
+        mapsi_writer=MapsiArticleWriter(backend),
+        mapsi_studio_writer=MapsiStudioContentWriter(backend),
         seo_quality_agent=SeoQualityAgent(backend),
     )
 
@@ -163,9 +171,116 @@ def test_generate_multichannel_assets_persists_supported_types(session) -> None:
 
     assert report["asset_count"] == 3
     assert {item["asset_type"] for item in report["assets"]} == {"prospect_newsletter", "linkedin_company_post", "website_article"}
+    assert report["engine"]["consumption"]["used_tokens"] > 0
     assert len(persisted.content_assets) == 4
     assert all(asset.content_hash for asset in persisted.content_assets)
     assert all(asset.status in {AssetStatus.APPROVED, AssetStatus.READY_FOR_REVIEW} for asset in persisted.content_assets)
+
+
+def test_generate_multichannel_marks_real_mode_when_openai_provider_is_used(session) -> None:
+    campaign_id = seed_campaign(session)
+    evidence_id = SqlAlchemyCampaignRepository(session).get(campaign_id).source_evidences[0].id
+    service = build_service(
+        session,
+        [
+            {
+                "plans": [
+                    {
+                        "asset_type": "website_article",
+                        "title": "Article title",
+                        "angle": "Angle",
+                        "audience_segment_id": "all_eligible_active_users",
+                        "evidence_ids": [evidence_id],
+                        "benefits": [{"statement": "Benefit demo", "claim_type": "demonstrated", "evidence_ids": [evidence_id]}],
+                        "client_mentions": [],
+                    }
+                ]
+            },
+            {
+                "headline": "Article title",
+                "summary": "Summary",
+                "body_html": "<p>Article</p>",
+                "body_text": "Article",
+                "seo_title": "SEO title",
+                "meta_description": "Meta",
+                "cta_label": "Demo",
+                "cta_url_template": "https://oling.example/demo",
+                "evidence_ids": [evidence_id],
+            },
+            {"passed": True, "issues": []},
+        ],
+        provider_type="openai",
+    )
+
+    report = service.generate(campaign_id, dry_run=True)
+
+    assert report["engine"]["mode"] == "real"
+
+
+def test_generate_multichannel_blocks_editorial_policy_violations(session) -> None:
+    campaign_id = seed_campaign(session)
+    evidence_id = SqlAlchemyCampaignRepository(session).get(campaign_id).source_evidences[0].id
+    service = build_service(
+        session,
+        [
+            {
+                "plans": [
+                    {
+                        "asset_type": "website_article",
+                        "title": "Article title",
+                        "angle": "Angle",
+                        "audience_segment_id": "all_eligible_active_users",
+                        "evidence_ids": [evidence_id],
+                        "benefits": [{"statement": "Benefit demo", "claim_type": "demonstrated", "evidence_ids": [evidence_id]}],
+                        "client_mentions": [],
+                    }
+                ]
+            },
+            {
+                "headline": "Article title",
+                "summary": "Summary",
+                "body_html": "<p>Resultat garanti et conforme.</p>",
+                "body_text": "Resultat garanti et conforme.",
+                "seo_title": "SEO title",
+                "meta_description": "Meta",
+                "cta_label": "Demo",
+                "cta_url_template": "https://oling.example/demo",
+                "evidence_ids": [evidence_id],
+            },
+            {"passed": True, "issues": []},
+        ],
+    )
+
+    with pytest.raises(EditorialGenerationBlockedError, match="Editorial policy failed"):
+        service.generate(campaign_id, dry_run=True)
+
+
+def test_content_change_invalidates_only_modified_asset(session) -> None:
+    repository = SqlAlchemyCampaignRepository(session)
+    campaign = CampaignRun(name="Campaign", objective="Obj", status=CampaignStatus.GENERATED)
+    campaign.content_assets = [
+        ContentAsset(campaign_run_id=campaign.id, asset_type="linkedin_company_post", channel="linkedin", title="A", body="<p>A</p>", status=AssetStatus.READY_FOR_REVIEW),
+        ContentAsset(campaign_run_id=campaign.id, asset_type="oling_news_article", channel="oling", title="B", body="<p>B</p>", status=AssetStatus.READY_FOR_REVIEW),
+    ]
+    campaign.source_evidences = [SourceEvidence(campaign_run_id=campaign.id, source_system="github", reference="sha:1")]
+    repository.add(campaign)
+
+    campaign = repository.get(campaign.id)
+    campaign.approve_asset(campaign.content_assets[0].id, "ok", "admin")
+    campaign.approve_asset(campaign.content_assets[1].id, "ok", "admin")
+    first_hash = campaign.content_assets[0].approved_content_hash
+    second_hash = campaign.content_assets[1].approved_content_hash
+    campaign.content_assets[0].body = "<p>Changed</p>"
+
+    persisted = repository.save(campaign)
+
+    assert persisted.content_assets[0].approved_content_hash == ""
+    assert persisted.content_assets[0].approved_by == ""
+    assert persisted.content_assets[0].approved_at is None
+    assert persisted.content_assets[0].status is AssetStatus.READY_FOR_REVIEW
+    assert persisted.content_assets[1].approved_content_hash == second_hash
+    assert persisted.content_assets[1].approved_content_hash != first_hash
+    assert persisted.status is CampaignStatus.APPROVED
 
 
 def test_generate_multichannel_blocks_unauthorized_client_mention(session) -> None:

@@ -9,7 +9,10 @@ from app.infrastructure.db import models  # noqa: F401
 
 config = context.config
 x_args = context.get_x_argument(as_dictionary=True)
-database_url = x_args.get("db_url", get_settings().database_url)
+configured_url = config.get_main_option("sqlalchemy.url")
+database_url = x_args.get("db_url") or (
+    configured_url if configured_url and configured_url != "sqlite:///./mapsi_growth_factory.db" else get_settings().database_url
+)
 config.set_main_option("sqlalchemy.url", database_url)
 
 if config.config_file_name is not None:

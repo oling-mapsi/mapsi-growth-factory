@@ -77,6 +77,21 @@ class MapsiUsageRepository:
             created_at=model.created_at,
         )
 
+    def list_instances(self) -> list[MapsiInstance]:
+        models = self.session.query(MapsiInstanceModel).all()
+        return [
+            MapsiInstance(
+                id=model.id,
+                instance_key=model.instance_key,
+                base_url=model.base_url,
+                secret_ref=model.secret_ref,
+                enabled=model.enabled,
+                contract_version=model.contract_version,
+                created_at=model.created_at,
+            )
+            for model in models
+        ]
+
     def upsert_customer_account(self, mapsi_instance_id: str, external_account_id: str) -> CustomerAccount:
         model = (
             self.session.query(CustomerAccountModel)
@@ -264,6 +279,20 @@ class MapsiUsageRepository:
             version=model.version,
             collected_at=model.collected_at,
         )
+
+    def list_capabilities(self) -> list[InstanceCapability]:
+        models = self.session.query(InstanceCapabilityModel).all()
+        return [
+            InstanceCapability(
+                id=model.id,
+                mapsi_instance_id=model.mapsi_instance_id,
+                capability_key=model.capability_key,
+                enabled=model.enabled,
+                version=model.version,
+                collected_at=model.collected_at,
+            )
+            for model in models
+        ]
 
     def usage_window_totals(self, membership_ids: list[str], *, start: datetime | None, end: datetime) -> dict[str, int]:
         if not membership_ids:

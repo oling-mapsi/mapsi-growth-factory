@@ -19,8 +19,8 @@ def test_contract_examples_are_valid_and_safe() -> None:
 
 def test_product_change_required_fields_present() -> None:
     example = load_json(CONTRACTS / "examples" / "product-change.example.json")
-    change = example["changes"][0]
-    assert {"change_id", "version", "deployed_at", "capability_key", "summary"}.issubset(change)
+    change = example["items"][0]
+    assert {"id", "title", "summary", "url", "published_at", "tags", "communicable"}.issubset(change)
 
 
 def test_forbidden_data_is_rejected() -> None:
@@ -82,7 +82,7 @@ def test_generated_client_is_typed_against_mock_server(monkeypatch) -> None:
                 "/internal/growth/capabilities": "capabilities.example.json",
                 "/internal/growth/usage-snapshot": "usage-snapshot.example.json",
                 "/internal/growth/contact-snapshot": "contact-snapshot.example.json",
-                "/internal/growth/product-changes": "product-change.example.json",
+                "/api/internal/growth/v1/product-changes": "product-change.example.json",
             }
             payload = json.loads((CONTRACTS / "examples" / file_map[path]).read_text(encoding="utf-8"))
             return FakeResponse(payload)
@@ -101,7 +101,8 @@ def test_generated_client_is_typed_against_mock_server(monkeypatch) -> None:
     assert usage.users[0].tenant_id == "tenant_alpha"
     assert usage.users[0].role_key == "manager"
     assert contacts.contacts[0].communication_eligible is True
-    assert changes.changes[0].capability_key == "planning-dashboard"
+    assert changes.contract_version == "1.0.0"
+    assert changes.items[0].id == "MAPSI-2026-010"
 
 
 def test_startup_logs_contract_sha(caplog) -> None:

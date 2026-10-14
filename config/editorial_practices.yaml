@@ -1,0 +1,61 @@
+practices:
+  amoa:
+    enabled: true
+    family: transformation
+    priority: 20
+  direction-de-projet:
+    enabled: true
+    family: transformation
+    priority: 15
+  dsi-deleguee:
+    enabled: true
+    family: gouvernance-si
+    priority: 10
+  erp:
+    enabled: true
+    family: applications
+    priority: 10
+  gmao:
+    enabled: true
+    family: applications
+    priority: 30
+  ged-et-dematerialisation:
+    enabled: true
+    family: applications
+    priority: 25
+  facturation-electronique:
+    enabled: true
+    family: conformite
+    priority: 5
+  infrastructures-et-reseaux:
+    enabled: true
+    family: infrastructure
+    priority: 20
+  cybersecurite:
+    enabled: true
+    family: securite
+    priority: 10
+  rgpd-et-dpo:
+    enabled: true
+    family: conformite
+    priority: 15
+  pca-et-pra:
+    enabled: true
+    family: securite
+    priority: 18
+  qualite-et-systemes-iso:
+    enabled: true
+    family: conformite
+    priority: 22
+  data-et-bi:
+    enabled: true
+    family: data
+    priority: 12
+  controle-interne:
+    enabled: true
+    family: gouvernance
+    priority: 28
+  marches-publics:
+    enabled: true
+    family: secteur-public
+    priority: 24

@@ -11,7 +11,7 @@ from app.application.ports.idempotency import IdempotencyStorePort
 from app.application.services.campaign_publisher import CampaignPublisher
 from app.application.services.campaign_service import CampaignService
 from app.application.services.adoption_measurement_service import AdoptionMeasurementService
-from app.application.services.github_intelligence_service import GitHubIntelligenceService
+from app.application.services.mapsi_product_changes_service import MapsiProductChangesService
 from app.application.services.linkedin_metrics_collector import LinkedInMetricsCollector
 from app.application.services.linkedin_oauth_service import LinkedInOAuthService
 from app.application.services.linkedin_organization_resolver import LinkedInOrganizationResolver
@@ -34,7 +34,7 @@ from app.domain.errors import (
 from app.entrypoints.api.dependencies import (
     get_campaign_service,
     get_campaign_publisher_service,
-    get_github_intelligence_service,
+    get_mapsi_product_changes_service,
     get_adoption_measurement_service,
     get_mapsi_usage_collection_services,
     get_linkedin_metrics_collector,
@@ -88,7 +88,7 @@ def _store(
 def collect_product_changes(
     request: Request,
     payload: WorkflowCommandRequest,
-    service: GitHubIntelligenceService = Depends(get_github_intelligence_service),
+    service: MapsiProductChangesService = Depends(get_mapsi_product_changes_service),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     store: IdempotencyStorePort = Depends(get_idempotency_store),
 ) -> WorkflowOperationResponse:
@@ -96,7 +96,7 @@ def collect_product_changes(
     cached = resolve_idempotent_response(request, idempotency_key, body, store)
     if cached is not None:
         return cached
-    count = 0 if payload.dry_run else service.run_weekly_backfill()
+    count = service.collect(dry_run=payload.dry_run)
     return _store(
         request,
         idempotency_key,

@@ -17,6 +17,24 @@ depends_on = None
 
 def upgrade() -> None:
     bind = op.get_bind()
+    if bind.dialect.name == "mysql":
+        op.execute(
+            """
+            CREATE TRIGGER audit_logs_no_update
+            BEFORE UPDATE ON audit_logs
+            FOR EACH ROW
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit_logs is append-only'
+            """
+        )
+        op.execute(
+            """
+            CREATE TRIGGER audit_logs_no_delete
+            BEFORE DELETE ON audit_logs
+            FOR EACH ROW
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit_logs is append-only'
+            """
+        )
+        return
     if bind.dialect.name != "postgresql":
         return
     op.execute(
@@ -49,6 +67,10 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
+    if bind.dialect.name == "mysql":
+        op.execute("DROP TRIGGER IF EXISTS audit_logs_no_update;")
+        op.execute("DROP TRIGGER IF EXISTS audit_logs_no_delete;")
+        return
     if bind.dialect.name != "postgresql":
         return
     op.execute("DROP TRIGGER IF EXISTS audit_logs_no_update ON audit_logs;")

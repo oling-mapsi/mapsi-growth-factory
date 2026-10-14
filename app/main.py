@@ -7,6 +7,8 @@ from app.entrypoints.api.routes.campaigns import router as campaigns_router
 from app.entrypoints.api.routes.github_webhooks import router as github_webhooks_router
 from app.entrypoints.api.routes.operations import router as operations_router
 from app.entrypoints.api.routes.review_portal import router as review_portal_router
+from app.entrypoints.api.routes.simple_campaigns import router as simple_campaigns_router
+from app.entrypoints.api.routes.studio_admin import router as studio_admin_router
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,8 @@ def create_app() -> FastAPI:
     app.include_router(operations_router)
     app.include_router(github_webhooks_router)
     app.include_router(review_portal_router)
+    app.include_router(simple_campaigns_router)
+    app.include_router(studio_admin_router)
 
     @app.on_event("startup")
     def log_contract_sha() -> None:

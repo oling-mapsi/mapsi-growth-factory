@@ -6,6 +6,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from app.application.models.editorial_agents import (
+    EditorialExecutionMetadata,
     CustomerEmailWriterInput,
     CustomerEmailWriterOutput,
     EditorialStrategyInput,
@@ -27,7 +28,7 @@ from app.application.models.editorial_agents import (
     WebsiteArticleWriterInput,
     WebsiteArticleWriterOutput,
 )
-from app.application.ports.editorial_agents import OutputModelT, StructuredAgentBackendPort
+from app.application.ports.editorial_agents import EditorialProvider, OutputModelT
 from app.core.config import get_settings
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -40,15 +41,16 @@ class PromptedStructuredAgent:
     prompt_version = "v1"
     output_type: type[BaseModel]
 
-    def __init__(self, backend: StructuredAgentBackendPort) -> None:
-        self.backend = backend
+    def __init__(self, provider: EditorialProvider) -> None:
+        self.provider = provider
         settings = get_settings()
         self.model_name = settings.editorial_agent_model
         self.temperature = settings.editorial_agent_temperature
+        self.last_execution: EditorialExecutionMetadata | None = None
 
     def run(self, input_model: BaseModel) -> OutputModelT:
         prompt = (PROMPTS_ROOT / self.prompt_dir / f"{self.prompt_version}.txt").read_text(encoding="utf-8")
-        return self.backend.run_structured(
+        result = self.provider.run_structured(
             agent_name=self.agent_name,
             prompt=prompt,
             input_model=input_model,
@@ -57,12 +59,18 @@ class PromptedStructuredAgent:
             prompt_version=self.prompt_version,
             temperature=self.temperature,
         )
+        self.last_execution = result.metadata
+        return result.output
 
 
-class ProductIntelligenceAgent(PromptedStructuredAgent):
-    agent_name = "ProductIntelligenceAgent"
+class ProductChangeAnalyst(PromptedStructuredAgent):
+    agent_name = "ProductChangeAnalyst"
     prompt_dir = "product-intelligence-agent"
     output_type = ProductIntelligenceOutput
+
+
+class ProductIntelligenceAgent(ProductChangeAnalyst):
+    agent_name = "ProductIntelligenceAgent"
 
 
 class UsageIntelligenceAgent(PromptedStructuredAgent):
@@ -77,16 +85,24 @@ class EditorialStrategyAgent(PromptedStructuredAgent):
     output_type = EditorialStrategyOutput
 
 
-class CustomerEmailWriterAgent(PromptedStructuredAgent):
-    agent_name = "CustomerEmailWriterAgent"
+class MapsiUserEmailWriter(PromptedStructuredAgent):
+    agent_name = "MapsiUserEmailWriter"
     prompt_dir = "customer-email-writer-agent"
     output_type = CustomerEmailWriterOutput
 
 
-class QualityControlAgent(PromptedStructuredAgent):
-    agent_name = "QualityControlAgent"
+class CustomerEmailWriterAgent(MapsiUserEmailWriter):
+    agent_name = "CustomerEmailWriterAgent"
+
+
+class EditorialQualityAgent(PromptedStructuredAgent):
+    agent_name = "EditorialQualityAgent"
     prompt_dir = "quality-control-agent"
     output_type = QualityControlOutput
+
+
+class QualityControlAgent(EditorialQualityAgent):
+    agent_name = "QualityControlAgent"
 
 
 class MarketEditorialStrategyAgent(PromptedStructuredAgent):
@@ -95,22 +111,46 @@ class MarketEditorialStrategyAgent(PromptedStructuredAgent):
     output_type = MarketEditorialStrategyOutput
 
 
-class NewsletterWriterAgent(PromptedStructuredAgent):
-    agent_name = "NewsletterWriterAgent"
+class ProspectNewsletterWriter(PromptedStructuredAgent):
+    agent_name = "ProspectNewsletterWriter"
     prompt_dir = "newsletter-writer-agent"
     output_type = NewsletterWriterOutput
 
 
-class LinkedInWriterAgent(PromptedStructuredAgent):
-    agent_name = "LinkedInWriterAgent"
+class NewsletterWriterAgent(ProspectNewsletterWriter):
+    agent_name = "NewsletterWriterAgent"
+
+
+class LinkedInPostWriter(PromptedStructuredAgent):
+    agent_name = "LinkedInPostWriter"
     prompt_dir = "linkedin-writer-agent"
     output_type = LinkedInWriterOutput
 
 
-class WebsiteArticleWriterAgent(PromptedStructuredAgent):
-    agent_name = "WebsiteArticleWriterAgent"
+class LinkedInWriterAgent(LinkedInPostWriter):
+    agent_name = "LinkedInWriterAgent"
+
+
+class OlingArticleWriter(PromptedStructuredAgent):
+    agent_name = "OlingArticleWriter"
     prompt_dir = "website-article-writer-agent"
     output_type = WebsiteArticleWriterOutput
+
+
+class MapsiArticleWriter(PromptedStructuredAgent):
+    agent_name = "MapsiArticleWriter"
+    prompt_dir = "website-article-writer-agent"
+    output_type = WebsiteArticleWriterOutput
+
+
+class MapsiStudioContentWriter(PromptedStructuredAgent):
+    agent_name = "MapsiStudioContentWriter"
+    prompt_dir = "website-article-writer-agent"
+    output_type = WebsiteArticleWriterOutput
+
+
+class WebsiteArticleWriterAgent(OlingArticleWriter):
+    agent_name = "WebsiteArticleWriterAgent"
 
 
 class SeoQualityAgent(PromptedStructuredAgent):
@@ -122,3 +162,17 @@ class SeoQualityAgent(PromptedStructuredAgent):
 def contains_pii(payload: dict) -> bool:
     text = str(payload)
     return bool(re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", text, flags=re.IGNORECASE))
+
+
+def detect_editorial_policy_violations(payload: dict | str) -> list[str]:
+    text = str(payload).casefold()
+    violations: list[str] = []
+    patterns = {
+        "invented_testimonial": [r"\btemoignage\b", r"\bselon\s+[A-Z][a-z]+\b"],
+        "compliance_promise": [r"\bconforme\b", r"\bcertifi", r"\bcompliance\b"],
+        "guaranteed_result": [r"\bgaranti", r"\bgarantie\b", r"\bresultat[s]?\s+garanti"],
+    }
+    for code, entries in patterns.items():
+        if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in entries):
+            violations.append(code)
+    return violations

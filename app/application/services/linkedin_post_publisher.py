@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+from app.core.config import get_settings
+from app.application.services.operation_mode_service import OperationModeService
 from app.application.services.linkedin_oauth_service import LinkedInOAuthService
 from app.application.services.linkedin_organization_resolver import LinkedInOrganizationResolver
 from app.domain.entities import Interaction, LinkedInPublication, Publication, utcnow
 from app.domain.enums import AssetStatus, CampaignStatus
-from app.domain.errors import CampaignNotFoundError, CampaignPublicationForbiddenError, DuplicateCampaignPublicationError
+from app.domain.errors import CampaignNotFoundError, CampaignPublicationForbiddenError, DuplicateCampaignPublicationError, EmergencyStopActiveError
 from app.infrastructure.connectors.linkedin import LinkedInConnector
 from app.infrastructure.observability import structured_log
 from app.infrastructure.repositories.audit import SqlAlchemyAuditLogRepository
 from app.infrastructure.repositories.campaigns import SqlAlchemyCampaignRepository
+from app.infrastructure.repositories.channel_operational_state import ChannelOperationalStateRepository
 from app.infrastructure.repositories.linkedin import LinkedInPublicationRepository
 
 
@@ -29,26 +32,39 @@ class LinkedInPostPublisher:
         self.organization_resolver = organization_resolver
         self.connector = connector
         self.audit_log = audit_log
+        self.settings = get_settings()
+        self.operation_mode = OperationModeService()
 
     def publish_asset(self, campaign_id: str, asset_id: str, *, idempotency_key: str = "") -> dict:
         campaign = self.campaign_repository.get(campaign_id)
         if campaign is None:
             raise CampaignNotFoundError(f"Campaign {campaign_id} not found.")
-        if campaign.status not in {CampaignStatus.APPROVED, CampaignStatus.PUBLISHED}:
+        if campaign.status not in {CampaignStatus.APPROVED, CampaignStatus.PARTIALLY_PUBLISHED, CampaignStatus.PUBLISHED}:
             raise CampaignPublicationForbiddenError("Campaign must be APPROVED before LinkedIn publication.")
         asset = next((item for item in campaign.content_assets if item.id == asset_id), None)
         if asset is None:
             raise CampaignPublicationForbiddenError("LinkedIn asset not found.")
         if asset.channel != "linkedin":
             raise CampaignPublicationForbiddenError("Asset is not a LinkedIn asset.")
-        if asset.status is not AssetStatus.APPROVED:
-            raise CampaignPublicationForbiddenError("LinkedIn publication requires an APPROVED asset.")
-
+        self.operation_mode.assert_linkedin_real_publication_allowed()
+        operational = self._operational_repository()
+        if not operational.is_channel_feature_enabled(
+            channel="linkedin",
+            static_default=self.settings.publish_linkedin_enabled,
+            safe_default_enabled=self.settings.channel_operational_safe_default_enabled,
+        ):
+            raise CampaignPublicationForbiddenError("PUBLISH_LINKEDIN_ENABLED is false.")
+        if operational.is_channel_kill_switch_active("linkedin"):
+            raise EmergencyStopActiveError("Channel publication kill switch is active.")
+        if operational.is_global_kill_switch_active(static_default=self.settings.workflow_kill_switch):
+            raise EmergencyStopActiveError("Global publication kill switch is active.")
         existing = self.publication_repository.get_by_asset_hash(asset.id, asset.content_hash)
         if existing and existing.status in {"published", "manual_copy"}:
             if idempotency_key and existing.idempotency_key and existing.idempotency_key != idempotency_key:
                 raise DuplicateCampaignPublicationError("This LinkedIn asset version has already been published.")
             return self._serialize(existing)
+        if asset.status is not AssetStatus.APPROVED:
+            raise CampaignPublicationForbiddenError("LinkedIn publication requires an APPROVED asset.")
 
         publication = existing or LinkedInPublication(
             campaign_run_id=campaign.id,
@@ -65,7 +81,15 @@ class LinkedInPostPublisher:
             publication.published_at = utcnow()
             publication.metrics = {"manual_copy_required": True}
             publication = self.publication_repository.save(publication)
-            self.audit_log.append(campaign.id, "campaign.linkedin_manual_copy_required", {"asset_id": asset.id})
+            self.audit_log.append(
+                campaign.id,
+                "publication.manual_copy_required",
+                {},
+                asset_id=asset.id,
+                actor_source="system",
+                channel="linkedin",
+                result="SUCCESS",
+            )
             return self._serialize(publication)
 
         token = self.oauth_service.get_valid_token()
@@ -84,8 +108,15 @@ class LinkedInPostPublisher:
         publication = self.publication_repository.save(publication)
 
         asset.results = {**asset.results, "linkedin_post_urn": remote["post_urn"]}
-        if not any(item.channel == "linkedin" for item in campaign.publications):
-            campaign.publish(Publication(campaign_run_id=campaign.id, channel="linkedin", external_reference=remote["post_urn"]))
+        campaign.publish(
+            Publication(
+                campaign_run_id=campaign.id,
+                content_asset_id=asset.id,
+                channel="linkedin",
+                external_reference=remote["post_urn"],
+                external_url=remote["post_urn"],
+            )
+        )
         campaign.interactions.append(
             Interaction(
                 campaign_run_id=campaign.id,
@@ -94,9 +125,23 @@ class LinkedInPostPublisher:
             )
         )
         self.campaign_repository.save(campaign)
-        self.audit_log.append(campaign.id, "campaign.linkedin_published", {"asset_id": asset.id, "post_urn": remote["post_urn"]})
+        self.audit_log.append(
+            campaign.id,
+            "publication.published",
+            {"post_urn": remote["post_urn"]},
+            asset_id=asset.id,
+            actor_source="system",
+            idempotency_key=idempotency_key,
+            previous_state={"status": "APPROVED"},
+            new_state={"status": asset.status.value},
+            channel="linkedin",
+            result="SUCCESS",
+        )
         structured_log("campaign.linkedin_published", campaign_id=campaign.id, asset_id=asset.id, mode=self.connector.config.mode)
         return self._serialize(publication)
+
+    def _operational_repository(self) -> ChannelOperationalStateRepository:
+        return ChannelOperationalStateRepository(self.campaign_repository.session)
 
     def _serialize(self, publication: LinkedInPublication) -> dict:
         return {

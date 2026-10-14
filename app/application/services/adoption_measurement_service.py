@@ -90,7 +90,13 @@ class AdoptionMeasurementService:
             )
             imported += 1
         self.campaign_repository.save(campaign)
-        self.audit_log.append(campaign.id, "campaign.adoption_events_imported", {"imported": imported, "skipped": skipped})
+        self.audit_log.append(
+            campaign.id,
+            "metrics.adoption_events_imported",
+            {"imported": imported, "skipped": skipped},
+            actor_source="system",
+            result="SUCCESS",
+        )
         return {"imported": imported, "skipped": skipped}
 
     def build_report(self, campaign_id: str) -> dict:
@@ -165,7 +171,13 @@ class AdoptionMeasurementService:
                 "attribution": "Correlative only. Usage deltas may include parallel product, support or customer-side effects.",
             },
         }
-        self.audit_log.append(campaign.id, "campaign.adoption_report_built", {"alerts": report["alerts"]})
+        self.audit_log.append(
+            campaign.id,
+            "metrics.adoption_report_built",
+            {"alerts": report["alerts"]},
+            actor_source="system",
+            result="SUCCESS",
+        )
         structured_log("campaign.adoption_report_built", campaign_id=campaign.id, alerts=len(report["alerts"]))
         return report
 
