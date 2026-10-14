@@ -91,3 +91,25 @@ def test_audit_failure_rolls_back_quality_and_status_atomically(session,monkeypa
     session.commit();session.expire_all()
     assert session.get(ContentAssetModel,asset.id).status=='QUALITY_FAILED'
     assert session.get(ContentAssetModel,asset.id).results['editorial_quality']['passed'] is False
+
+
+def test_quality_reevaluation_accepts_faithful_html_plain_projection_without_rewriting(session):
+    from bs4 import BeautifulSoup
+    asset,_=_fixture(session);row=session.get(ContentAssetModel,asset.id)
+    results=copy.deepcopy(row.results)
+    results['editorial_article']['body_html'] += '<ul><li>Decision</li></ul><p><a href="https://oling.fr/">Echanger avec OLING</a>.</p>'
+    results['editorial_article']['body_text'] += '\n- Decision\nEchanger avec OLING : https://oling.fr/'
+    row.results=results
+    row.content_html=attach_illustration(results['editorial_article']['body_html'],asset_id=asset.id,alt='ERP')
+    row.content_text=BeautifulSoup(row.content_html,'html.parser').get_text(' ',strip=True)
+    session.commit()
+    result=_reevaluate(session,asset,apply=True)
+    assert result['content_consistent'] and result['quality']['passed']
+    assert row.content_version==4 and row.content_text.endswith('Echanger avec OLING .')
+
+
+def test_quality_reevaluation_rejects_a_plain_text_edit_even_if_html_is_unchanged(session):
+    asset,_=_fixture(session);row=session.get(ContentAssetModel,asset.id)
+    row.content_text += ' This customer result is unsupported.';session.commit()
+    result=_reevaluate(session,asset)
+    assert not result['content_consistent'] and not result['quality']['passed']

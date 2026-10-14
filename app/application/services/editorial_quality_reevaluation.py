@@ -41,9 +41,12 @@ class EditorialQualityReevaluationService:
         stored = EditorialArticle.model_validate(results.get("editorial_article") or {})
         current = stored.model_copy(deep=True, update={"title": row.title, "body_html": row.content_html, "body_text": row.content_text, "excerpt": row.excerpt})
         report = EditorialQualityValidator().validate(current, context)
+        plain = re.sub(r"\s+", " ", row.content_text).strip()
+        stored_plain = re.sub(r"\s+", " ", stored.body_text).strip()
+        html_plain = re.sub(r"\s+", " ", BeautifulSoup(row.content_html, "html.parser").get_text(" ", strip=True)).strip()
         consistent = (row.title == stored.title and row.excerpt == stored.excerpt
                       and _visible(row.content_html) == _visible(stored.body_html)
-                      and re.sub(r"\s+", " ", row.content_text).strip() == re.sub(r"\s+", " ", stored.body_text).strip())
+                      and plain in {stored_plain, html_plain})
         if not consistent:
             report.issues.append(EditorialQualityIssue(code="editorial_content_mismatch", message="Current article differs from its sourced editorial record; human review is required.", severity="error"))
             report.passed = False
