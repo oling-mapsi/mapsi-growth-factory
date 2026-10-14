@@ -258,7 +258,7 @@ def approve_asset(
             service.approve_asset(
                 campaign_id,
                 asset_id,
-                ApproveSimpleAssetCommand(comment=payload.comment, expected_version=payload.expected_version, actor=principal.actor_id),
+                ApproveSimpleAssetCommand(comment=payload.comment, expected_version=payload.expected_version, actor=principal.actor_id, confirm_editorial_review=payload.confirm_editorial_review),
             ),
         )
     except DomainError as exc:

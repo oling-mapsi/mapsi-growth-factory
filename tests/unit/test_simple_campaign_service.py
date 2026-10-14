@@ -43,6 +43,72 @@ class TrackingPublisher(PublisherPort):
         return {}
 
 
+def test_new_article_generation_finishes_images_and_seo_without_touching_existing_articles(session):
+    from app.application.services.growth_image_generation import GrowthImageResult
+    from app.application.services.growth_seo_geo import GrowthSeoGeoResult
+    calls = []
+    class Images:
+        def generate(self, **kwargs):
+            calls.append(('image', kwargs['locale']))
+            return GrowthImageResult(model='fixture', prompt='fixture', alt_text='Illustration '+kwargs['locale'],
+                storage_path='storage/fixture-'+kwargs['locale']+'.png', data_url='', output_format='png', duration_ms=1, tokens={})
+    class Seo:
+        def prepare(self, **kwargs):
+            calls.append(('seo', kwargs['locale']))
+            return GrowthSeoGeoResult(status='READY', checks=[], metadata={'locale':kwargs['locale']}, internal_links=[], html=kwargs['html'])
+    repository = SqlAlchemyCampaignRepository(session)
+    jobs = SimpleGenerationJobRepository(session)
+    service = SimpleCampaignService(repository, TrackingPublisher(), SqlAlchemyAuditLogRepository(session), InMemoryTaskQueue(),
+        project_root=Path(__file__).resolve().parents[2], editorial_service=build_editorial_generation_service(session, force_mode='simulated'),
+        knowledge_repository=KnowledgeRepository(session), image_service=Images(), seo_geo_service=Seo(), generation_jobs=jobs)
+    campaign = service.create_campaign(CreateSimpleCampaignCommand(name='Complete fixture', campaign_type='OLING', theme='ERP', selected_channels=['oling_site','mapsi_site']))
+    service.generate_campaign(campaign.id)
+    worker = SimpleGenerationWorker(jobs, service)
+    assert worker.process_one()
+    assert jobs.latest_for_campaign(campaign.id).status == 'SUCCEEDED'
+    assets = repository.get(campaign.id).content_assets
+    assert len(assets) == 4
+    assert len(calls) == 8
+    assert all(asset.results['image'] and asset.results['seo_geo']['status'] == 'READY' for asset in assets)
+    assert all('<figure>' in asset.content_html and not asset.approved_content_hash for asset in assets)
+    hashes = {asset.id: asset.content_hash for asset in assets}
+    service.generate_campaign(campaign.id)
+    worker.process_one()
+    assert len(calls) == 8
+    assert {asset.id:asset.content_hash for asset in repository.get(campaign.id).content_assets} == hashes
+
+
+def test_human_edit_can_be_validated_but_real_source_failures_remain_blocking(session):
+    import pytest
+    from app.application.services.simple_campaign_service import UpdateSimpleAssetCommand, ApproveSimpleAssetCommand
+    from app.domain.errors import InvalidStateTransitionError
+    repository = SqlAlchemyCampaignRepository(session)
+    service = SimpleCampaignService(repository, TrackingPublisher(), SqlAlchemyAuditLogRepository(session), InMemoryTaskQueue(),
+        project_root=Path(__file__).resolve().parents[2], editorial_service=build_editorial_generation_service(session, force_mode='simulated'),
+        knowledge_repository=KnowledgeRepository(session))
+    campaign = service.create_campaign(CreateSimpleCampaignCommand(name='Human editing fixture', campaign_type='OLING', theme='ERP', selected_channels=['oling_site']))
+    generated = service.generate_campaign(campaign.id)
+    asset = generated.content_assets[0]
+    edited = service.update_asset(campaign.id, asset.id, UpdateSimpleAssetCommand(expected_version=asset.content_version,
+        content_html=asset.content_html+'<p>Le cadrage se discute avec les equipes.</p>'))
+    current = next(item for item in edited.content_assets if item.id == asset.id)
+    assert not current.results['editorial_quality']['passed']
+    with pytest.raises(InvalidStateTransitionError):
+        service.approve_asset(campaign.id, asset.id, ApproveSimpleAssetCommand(expected_version=current.content_version, actor='fixture-admin'))
+    approved = service.approve_asset(campaign.id, asset.id, ApproveSimpleAssetCommand(expected_version=current.content_version,
+        actor='fixture-admin', confirm_editorial_review=True))
+    current = next(item for item in approved.content_assets if item.id == asset.id)
+    assert current.status is AssetStatus.APPROVED
+    assert current.results['human_editorial_review']['version'] == current.content_version
+    assert current.approved_content_hash == current.content_hash
+    other = next(item for item in approved.content_assets if item.id != asset.id)
+    other.results['editorial_quality'] = {'passed':False,'issues':[{'code':'claim_without_source','severity':'error','message':'Missing source'}]}
+    repository.save(approved)
+    with pytest.raises(InvalidStateTransitionError):
+        service.approve_asset(campaign.id, other.id, ApproveSimpleAssetCommand(expected_version=other.content_version,
+            actor='fixture-admin', confirm_editorial_review=True))
+
+
 def test_delete_simple_campaign_does_not_unpublish_published_assets(session) -> None:
     repository = SqlAlchemyCampaignRepository(session)
     publisher = TrackingPublisher()

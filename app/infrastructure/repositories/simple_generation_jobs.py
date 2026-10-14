@@ -40,7 +40,7 @@ class SimpleGenerationJobRepository:
             return latest
         if latest and latest.status in ACTIVE_STATUSES:
             return latest
-        identity = {key: value for key, value in (latest.parameters or {}).items() if key != 'generated_image'} if latest else {}
+        identity = {key: value for key, value in (latest.parameters or {}).items() if key not in {'generated_image', 'generated_images', 'completion_asset_ids'}} if latest else {}
         if latest and latest.status == "FAILED" and (identity or None) == (parameters or None):
             latest.status = "PENDING"
             latest.stage = "WAITING"
