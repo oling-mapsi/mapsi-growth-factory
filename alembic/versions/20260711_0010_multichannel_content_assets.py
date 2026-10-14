@@ -15,14 +15,18 @@ branch_labels = None
 depends_on = None
 
 
+def _json_default(value: str) -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else value
+
+
 def upgrade() -> None:
-    op.add_column("content_assets", sa.Column("evidence_ids", sa.JSON(), nullable=False, server_default="[]"))
+    op.add_column("content_assets", sa.Column("evidence_ids", sa.JSON(), nullable=False, server_default=_json_default("[]")))
     op.add_column("content_assets", sa.Column("audience_segment_id", sa.String(length=128), nullable=False, server_default=""))
     op.add_column("content_assets", sa.Column("content_hash", sa.String(length=64), nullable=False, server_default=""))
     op.add_column("content_assets", sa.Column("approved_by", sa.String(length=255), nullable=False, server_default=""))
     op.add_column("content_assets", sa.Column("approved_at", sa.DateTime(timezone=True), nullable=True))
     op.add_column("content_assets", sa.Column("scheduled_at", sa.DateTime(timezone=True), nullable=True))
-    op.add_column("content_assets", sa.Column("results", sa.JSON(), nullable=False, server_default="{}"))
+    op.add_column("content_assets", sa.Column("results", sa.JSON(), nullable=False, server_default=_json_default("{}")))
 
     if op.get_bind().dialect.name != "sqlite":
         op.alter_column("content_assets", "evidence_ids", server_default=None)

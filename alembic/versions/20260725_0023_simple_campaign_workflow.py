@@ -15,10 +15,18 @@ branch_labels = None
 depends_on = None
 
 
+def _text_default() -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else ""
+
+
+def _json_default(value: str) -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else value
+
+
 def upgrade() -> None:
-    op.add_column("campaign_runs", sa.Column("theme", sa.Text(), nullable=False, server_default=""))
+    op.add_column("campaign_runs", sa.Column("theme", sa.Text(), nullable=False, server_default=_text_default()))
     op.add_column("campaign_runs", sa.Column("workflow_kind", sa.String(length=32), nullable=False, server_default="LEGACY"))
-    op.add_column("campaign_runs", sa.Column("selected_channels", sa.JSON(), nullable=False, server_default="[]"))
+    op.add_column("campaign_runs", sa.Column("selected_channels", sa.JSON(), nullable=False, server_default=_json_default("[]")))
 
     if op.get_bind().dialect.name != "sqlite":
         op.alter_column("campaign_runs", "theme", server_default=None)

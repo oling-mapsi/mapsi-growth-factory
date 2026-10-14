@@ -17,23 +17,31 @@ branch_labels = None
 depends_on = None
 
 
+def _text_default() -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else ""
+
+
+def _json_default(value: str) -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else value
+
+
 def upgrade() -> None:
     op.create_table(
         "feature_communication_catalog",
         sa.Column("feature_id", sa.String(length=128), nullable=False),
         sa.Column("module", sa.String(length=128), nullable=False, server_default=""),
         sa.Column("title", sa.String(length=255), nullable=False, server_default=""),
-        sa.Column("functional_description", sa.Text(), nullable=False, server_default=""),
-        sa.Column("user_benefit", sa.Text(), nullable=False, server_default=""),
-        sa.Column("target_roles", sa.JSON(), nullable=False, server_default="[]"),
-        sa.Column("target_modules", sa.JSON(), nullable=False, server_default="[]"),
+        sa.Column("functional_description", sa.Text(), nullable=False, server_default=_text_default()),
+        sa.Column("user_benefit", sa.Text(), nullable=False, server_default=_text_default()),
+        sa.Column("target_roles", sa.JSON(), nullable=False, server_default=_json_default("[]")),
+        sa.Column("target_modules", sa.JSON(), nullable=False, server_default=_json_default("[]")),
         sa.Column("minimum_version", sa.String(length=64), nullable=False, server_default=""),
         sa.Column("availability", sa.String(length=64), nullable=False, server_default="general"),
         sa.Column("deep_link_template", sa.String(length=1024), nullable=False, server_default=""),
         sa.Column("communication_priority", sa.Integer(), nullable=False, server_default="100"),
         sa.Column("last_communicated_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("minimum_repeat_delay", sa.Integer(), nullable=False, server_default="14"),
-        sa.Column("source_evidence_ids", sa.JSON(), nullable=False, server_default="[]"),
+        sa.Column("source_evidence_ids", sa.JSON(), nullable=False, server_default=_json_default("[]")),
         sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.PrimaryKeyConstraint("feature_id"),
     )

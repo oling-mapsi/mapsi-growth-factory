@@ -15,8 +15,12 @@ branch_labels = None
 depends_on = None
 
 
+def _text_default() -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else ""
+
+
 def upgrade() -> None:
-    op.add_column("contact_identities", sa.Column("encrypted_email", sa.Text(), nullable=False, server_default=""))
+    op.add_column("contact_identities", sa.Column("encrypted_email", sa.Text(), nullable=False, server_default=_text_default()))
     op.add_column("contact_identities", sa.Column("email_valid", sa.Boolean(), nullable=False, server_default=sa.true()))
     op.create_table(
         "mautic_contact_links",

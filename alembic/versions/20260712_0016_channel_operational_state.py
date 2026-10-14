@@ -17,6 +17,10 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+def _text_default() -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else ""
+
+
 def upgrade() -> None:
     op.create_table(
         "channel_operational_states",
@@ -26,7 +30,7 @@ def upgrade() -> None:
         sa.Column("feature_expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("emergency_kill_switch", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("last_health_check", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("last_error", sa.Text(), nullable=False, server_default=""),
+        sa.Column("last_error", sa.Text(), nullable=False, server_default=_text_default()),
         sa.Column("updated_by", sa.String(length=255), nullable=False, server_default=""),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("id"),

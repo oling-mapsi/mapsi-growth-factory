@@ -15,6 +15,10 @@ branch_labels = None
 depends_on = None
 
 
+def _json_default(value: str) -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else value
+
+
 def upgrade() -> None:
     op.add_column("campaign_runs", sa.Column("campaign_type", sa.String(length=64), nullable=False, server_default=""))
     op.add_column("campaign_runs", sa.Column("weekly_pack_id", sa.String(length=36), nullable=False, server_default=""))
@@ -34,9 +38,9 @@ def upgrade() -> None:
         sa.Column("generated_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("reviewed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("campaign_ids", sa.JSON(), nullable=False, server_default="[]"),
-        sa.Column("global_summary", sa.JSON(), nullable=False, server_default="{}"),
-        sa.Column("operational_errors", sa.JSON(), nullable=False, server_default="[]"),
+        sa.Column("campaign_ids", sa.JSON(), nullable=False, server_default=_json_default("[]")),
+        sa.Column("global_summary", sa.JSON(), nullable=False, server_default=_json_default("{}")),
+        sa.Column("operational_errors", sa.JSON(), nullable=False, server_default=_json_default("[]")),
         sa.Column("pilot_mode", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("year", "week_number", name="uq_weekly_communication_packs_year_week"),

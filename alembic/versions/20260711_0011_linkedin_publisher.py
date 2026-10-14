@@ -15,15 +15,23 @@ branch_labels = None
 depends_on = None
 
 
+def _text_default() -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else ""
+
+
+def _json_default(value: str) -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else value
+
+
 def upgrade() -> None:
     op.create_table(
         "linkedin_oauth_tokens",
         sa.Column("id", sa.String(length=36), primary_key=True),
         sa.Column("provider", sa.String(length=64), nullable=False, server_default="linkedin"),
         sa.Column("subject", sa.String(length=64), nullable=False, server_default="organization"),
-        sa.Column("access_token", sa.Text(), nullable=False, server_default=""),
-        sa.Column("refresh_token", sa.Text(), nullable=False, server_default=""),
-        sa.Column("scope", sa.Text(), nullable=False, server_default=""),
+        sa.Column("access_token", sa.Text(), nullable=False, server_default=_text_default()),
+        sa.Column("refresh_token", sa.Text(), nullable=False, server_default=_text_default()),
+        sa.Column("scope", sa.Text(), nullable=False, server_default=_text_default()),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("refresh_expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -42,8 +50,8 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=32), nullable=False, server_default="draft"),
         sa.Column("mode", sa.String(length=16), nullable=False, server_default="mock"),
         sa.Column("idempotency_key", sa.String(length=255), nullable=False, server_default=""),
-        sa.Column("last_error", sa.Text(), nullable=False, server_default=""),
-        sa.Column("metrics", sa.JSON(), nullable=False, server_default="{}"),
+        sa.Column("last_error", sa.Text(), nullable=False, server_default=_text_default()),
+        sa.Column("metrics", sa.JSON(), nullable=False, server_default=_json_default("{}")),
         sa.Column("published_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("metrics_collected_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),

@@ -15,6 +15,10 @@ branch_labels = None
 depends_on = None
 
 
+def _json_default(value: str) -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else value
+
+
 def upgrade() -> None:
     with op.batch_alter_table("source_evidences") as batch_op:
         batch_op.alter_column("campaign_run_id", existing_type=sa.String(length=36), nullable=True)
@@ -76,7 +80,7 @@ def upgrade() -> None:
     with op.batch_alter_table("source_evidences") as batch_op:
         batch_op.add_column(sa.Column("product_change_id", sa.String(length=36), nullable=True))
         batch_op.add_column(sa.Column("evidence_type", sa.String(length=64), nullable=False, server_default=""))
-        batch_op.add_column(sa.Column("payload", sa.JSON(), nullable=False, server_default="{}"))
+        batch_op.add_column(sa.Column("payload", sa.JSON(), nullable=False, server_default=_json_default("{}")))
         batch_op.create_foreign_key("fk_source_evidences_product_change_id", "product_changes", ["product_change_id"], ["id"])
 
 

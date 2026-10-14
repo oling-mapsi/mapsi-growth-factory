@@ -15,6 +15,10 @@ branch_labels = None
 depends_on = None
 
 
+def _json_default(value: str) -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else value
+
+
 def upgrade() -> None:
     op.create_table(
         "studio_admin_jti_records",
@@ -33,8 +37,8 @@ def upgrade() -> None:
         "studio_admin_access_audits",
         sa.Column("id", sa.String(length=36), nullable=False),
         sa.Column("actor_id", sa.String(length=255), nullable=False),
-        sa.Column("actor_roles", sa.JSON(), nullable=False, server_default="[]"),
-        sa.Column("actor_permissions", sa.JSON(), nullable=False, server_default="[]"),
+        sa.Column("actor_roles", sa.JSON(), nullable=False, server_default=_json_default("[]")),
+        sa.Column("actor_permissions", sa.JSON(), nullable=False, server_default=_json_default("[]")),
         sa.Column("source", sa.String(length=64), nullable=False, server_default="mapsi-studio"),
         sa.Column("jti", sa.String(length=255), nullable=False),
         sa.Column("correlation_id", sa.String(length=255), nullable=False, server_default=""),

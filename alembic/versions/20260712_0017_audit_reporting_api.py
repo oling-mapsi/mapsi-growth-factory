@@ -21,23 +21,31 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _json_default(value: str) -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else value
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     is_postgresql = bind.dialect.name == "postgresql"
+    is_mysql = bind.dialect.name == "mysql"
     if is_postgresql:
         op.execute("DROP TRIGGER IF EXISTS audit_logs_no_update ON audit_logs;")
         op.execute("DROP TRIGGER IF EXISTS audit_logs_no_delete ON audit_logs;")
+    if is_mysql:
+        op.execute("DROP TRIGGER IF EXISTS audit_logs_no_update;")
+        op.execute("DROP TRIGGER IF EXISTS audit_logs_no_delete;")
     op.add_column("audit_logs", sa.Column("content_asset_id", sa.String(length=36), nullable=False, server_default=""))
     op.add_column("audit_logs", sa.Column("actor_id", sa.String(length=255), nullable=False, server_default=""))
     op.add_column("audit_logs", sa.Column("actor_source", sa.String(length=64), nullable=False, server_default="system"))
-    op.add_column("audit_logs", sa.Column("actor_roles", sa.JSON(), nullable=False, server_default="[]"))
+    op.add_column("audit_logs", sa.Column("actor_roles", sa.JSON(), nullable=False, server_default=_json_default("[]")))
     op.add_column("audit_logs", sa.Column("correlation_id", sa.String(length=255), nullable=False, server_default=""))
     op.add_column("audit_logs", sa.Column("idempotency_key", sa.String(length=255), nullable=False, server_default=""))
     op.add_column("audit_logs", sa.Column("channel", sa.String(length=64), nullable=False, server_default=""))
     op.add_column("audit_logs", sa.Column("result", sa.String(length=64), nullable=False, server_default=""))
     op.add_column("audit_logs", sa.Column("source_ip", sa.String(length=255), nullable=False, server_default=""))
-    op.add_column("audit_logs", sa.Column("previous_state", sa.JSON(), nullable=False, server_default="{}"))
-    op.add_column("audit_logs", sa.Column("new_state", sa.JSON(), nullable=False, server_default="{}"))
+    op.add_column("audit_logs", sa.Column("previous_state", sa.JSON(), nullable=False, server_default=_json_default("{}")))
+    op.add_column("audit_logs", sa.Column("new_state", sa.JSON(), nullable=False, server_default=_json_default("{}")))
     op.add_column("audit_logs", sa.Column("previous_integrity_hash", sa.String(length=64), nullable=False, server_default=""))
     op.add_column("audit_logs", sa.Column("integrity_hash", sa.String(length=64), nullable=False, server_default=""))
     op.alter_column("audit_logs", "campaign_run_id", existing_type=sa.String(length=36), nullable=True)
@@ -108,9 +116,30 @@ def upgrade() -> None:
             EXECUTE FUNCTION prevent_audit_logs_mutation();
             """
         )
+    if is_mysql:
+        op.execute(
+            """
+            CREATE TRIGGER audit_logs_no_update
+            BEFORE UPDATE ON audit_logs
+            FOR EACH ROW
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit_logs is append-only'
+            """
+        )
+        op.execute(
+            """
+            CREATE TRIGGER audit_logs_no_delete
+            BEFORE DELETE ON audit_logs
+            FOR EACH ROW
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit_logs is append-only'
+            """
+        )
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+    if bind.dialect.name == "mysql":
+        op.execute("DROP TRIGGER IF EXISTS audit_logs_no_update;")
+        op.execute("DROP TRIGGER IF EXISTS audit_logs_no_delete;")
     op.alter_column("audit_logs", "campaign_run_id", existing_type=sa.String(length=36), nullable=False)
     op.drop_column("audit_logs", "integrity_hash")
     op.drop_column("audit_logs", "previous_integrity_hash")

@@ -15,21 +15,29 @@ branch_labels = None
 depends_on = None
 
 
+def _text_default() -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else ""
+
+
+def _json_default(value: str) -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else value
+
+
 def upgrade() -> None:
     op.add_column("content_assets", sa.Column("locale", sa.String(length=16), nullable=False, server_default="fr-FR"))
     op.add_column("content_assets", sa.Column("subject", sa.String(length=255), nullable=False, server_default=""))
-    op.add_column("content_assets", sa.Column("content_html", sa.Text(), nullable=False, server_default=""))
-    op.add_column("content_assets", sa.Column("content_text", sa.Text(), nullable=False, server_default=""))
-    op.add_column("content_assets", sa.Column("excerpt", sa.Text(), nullable=False, server_default=""))
+    op.add_column("content_assets", sa.Column("content_html", sa.Text(), nullable=False, server_default=_text_default()))
+    op.add_column("content_assets", sa.Column("content_text", sa.Text(), nullable=False, server_default=_text_default()))
+    op.add_column("content_assets", sa.Column("excerpt", sa.Text(), nullable=False, server_default=_text_default()))
     op.add_column("content_assets", sa.Column("call_to_action", sa.String(length=255), nullable=False, server_default=""))
     op.add_column("content_assets", sa.Column("target_url", sa.String(length=1024), nullable=False, server_default=""))
-    op.add_column("content_assets", sa.Column("source_evidence_ids", sa.JSON(), nullable=False, server_default="[]"))
+    op.add_column("content_assets", sa.Column("source_evidence_ids", sa.JSON(), nullable=False, server_default=_json_default("[]")))
     op.add_column("content_assets", sa.Column("content_version", sa.Integer(), nullable=False, server_default="1"))
     op.add_column("content_assets", sa.Column("approved_content_hash", sa.String(length=64), nullable=False, server_default=""))
     op.add_column("content_assets", sa.Column("published_at", sa.DateTime(timezone=True), nullable=True))
     op.add_column("content_assets", sa.Column("external_publication_id", sa.String(length=255), nullable=False, server_default=""))
     op.add_column("content_assets", sa.Column("external_publication_url", sa.String(length=1024), nullable=False, server_default=""))
-    op.add_column("content_assets", sa.Column("last_error", sa.Text(), nullable=False, server_default=""))
+    op.add_column("content_assets", sa.Column("last_error", sa.Text(), nullable=False, server_default=_text_default()))
     op.add_column("content_assets", sa.Column("retry_count", sa.Integer(), nullable=False, server_default="0"))
 
     op.add_column("publications", sa.Column("content_asset_id", sa.String(length=36), nullable=False, server_default=""))

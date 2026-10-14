@@ -15,6 +15,14 @@ branch_labels = None
 depends_on = None
 
 
+def _text_default() -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else ""
+
+
+def _json_default(value: str) -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else value
+
+
 def upgrade() -> None:
     op.create_table(
         "oling_news_publications",
@@ -34,8 +42,8 @@ def upgrade() -> None:
         sa.Column("published_content_version", sa.Integer(), nullable=True),
         sa.Column("published_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("unpublished_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("last_error", sa.Text(), nullable=False, server_default=""),
-        sa.Column("metrics", sa.JSON(), nullable=False, server_default="{}"),
+        sa.Column("last_error", sa.Text(), nullable=False, server_default=_text_default()),
+        sa.Column("metrics", sa.JSON(), nullable=False, server_default=_json_default("{}")),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["campaign_run_id"], ["campaign_runs.id"]),

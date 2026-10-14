@@ -86,7 +86,7 @@ if test_database_url.get_backend_name() == "sqlite":
 else:
     database_name = test_database_url.database or ""
     host = test_database_url.host or "localhost"
-    if test_database_url.get_backend_name() == "postgresql" and (
+    if test_database_url.get_backend_name() in {"postgresql", "mysql"} and (
         host not in {"localhost", "127.0.0.1", "::1"} or not any(marker in database_name for marker in ("phase7", "staging", "test"))
     ):
         raise RuntimeError(f"Refusing unsafe test database URL: {TEST_DATABASE_URL}")
@@ -96,7 +96,7 @@ TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=Fals
 
 @pytest.fixture(autouse=True)
 def reset_database(request: pytest.FixtureRequest) -> Generator[None, None, None]:
-    if request.node.get_closest_marker("postgres"):
+    if request.node.get_closest_marker("postgres") or request.node.get_closest_marker("mysql"):
         yield
         return
     Base.metadata.create_all(bind=engine)

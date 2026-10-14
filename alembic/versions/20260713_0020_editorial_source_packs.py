@@ -15,6 +15,14 @@ branch_labels = None
 depends_on = None
 
 
+def _text_default() -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else ""
+
+
+def _json_default(value: str) -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else value
+
+
 def upgrade() -> None:
     op.create_table(
         "editorial_source_packs",
@@ -22,7 +30,7 @@ def upgrade() -> None:
         sa.Column("weekly_pack_id", sa.String(length=36), nullable=False, server_default=""),
         sa.Column("campaign_type", sa.String(length=64), nullable=False),
         sa.Column("title", sa.String(length=255), nullable=False),
-        sa.Column("summary", sa.Text(), nullable=False, server_default=""),
+        sa.Column("summary", sa.Text(), nullable=False, server_default=_text_default()),
         sa.Column("status", sa.String(length=32), nullable=False, server_default="DRAFT"),
         sa.Column("confidentiality_level", sa.String(length=32), nullable=False, server_default="INTERNAL"),
         sa.Column("created_by", sa.String(length=255), nullable=False, server_default=""),
@@ -40,10 +48,10 @@ def upgrade() -> None:
         sa.Column("source_title", sa.String(length=255), nullable=False, server_default=""),
         sa.Column("source_date", sa.DateTime(timezone=True), nullable=True),
         sa.Column("source_author", sa.String(length=255), nullable=False, server_default=""),
-        sa.Column("factual_summary", sa.Text(), nullable=False, server_default=""),
-        sa.Column("usable_facts", sa.JSON(), nullable=False, server_default="[]"),
-        sa.Column("anonymized_facts", sa.JSON(), nullable=False, server_default="[]"),
-        sa.Column("prohibited_facts", sa.JSON(), nullable=False, server_default="[]"),
+        sa.Column("factual_summary", sa.Text(), nullable=False, server_default=_text_default()),
+        sa.Column("usable_facts", sa.JSON(), nullable=False, server_default=_json_default("[]")),
+        sa.Column("anonymized_facts", sa.JSON(), nullable=False, server_default=_json_default("[]")),
+        sa.Column("prohibited_facts", sa.JSON(), nullable=False, server_default=_json_default("[]")),
         sa.Column("client_name", sa.String(length=255), nullable=False, server_default=""),
         sa.Column("client_name_usage_authorized", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("confidentiality_level", sa.String(length=32), nullable=False, server_default="INTERNAL"),
@@ -51,7 +59,7 @@ def upgrade() -> None:
         sa.Column("source_url", sa.String(length=2048), nullable=False, server_default=""),
         sa.Column("external_source_id", sa.String(length=255), nullable=False, server_default=""),
         sa.Column("content_hash", sa.String(length=64), nullable=False, server_default=""),
-        sa.Column("manual_input", sa.JSON(), nullable=False, server_default="{}"),
+        sa.Column("manual_input", sa.JSON(), nullable=False, server_default=_json_default("{}")),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["source_pack_id"], ["editorial_source_packs.id"]),

@@ -15,6 +15,14 @@ branch_labels = None
 depends_on = None
 
 
+def _text_default() -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else ""
+
+
+def _json_default(value: str) -> str | None:
+    return None if op.get_bind().dialect.name == "mysql" else value
+
+
 def upgrade() -> None:
     op.create_table(
         "asset_revision_snapshots",
@@ -25,14 +33,14 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=32), nullable=False, server_default=""),
         sa.Column("title", sa.String(length=255), nullable=False, server_default=""),
         sa.Column("subject", sa.String(length=255), nullable=False, server_default=""),
-        sa.Column("content_html", sa.Text(), nullable=False, server_default=""),
-        sa.Column("content_text", sa.Text(), nullable=False, server_default=""),
-        sa.Column("excerpt", sa.Text(), nullable=False, server_default=""),
+        sa.Column("content_html", sa.Text(), nullable=False, server_default=_text_default()),
+        sa.Column("content_text", sa.Text(), nullable=False, server_default=_text_default()),
+        sa.Column("excerpt", sa.Text(), nullable=False, server_default=_text_default()),
         sa.Column("call_to_action", sa.String(length=255), nullable=False, server_default=""),
         sa.Column("target_url", sa.String(length=1024), nullable=False, server_default=""),
         sa.Column("content_hash", sa.String(length=64), nullable=False, server_default=""),
         sa.Column("approved_content_hash", sa.String(length=64), nullable=False, server_default=""),
-        sa.Column("results", sa.JSON(), nullable=False, server_default="{}"),
+        sa.Column("results", sa.JSON(), nullable=False, server_default=_json_default("{}")),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["campaign_run_id"], ["campaign_runs.id"]),
         sa.ForeignKeyConstraint(["content_asset_id"], ["content_assets.id"]),
