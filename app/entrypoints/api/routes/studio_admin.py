@@ -855,7 +855,7 @@ def reject_ready_assets(
         raise _to_http_error(exc, correlation_id) from exc
 
 
-@router.get("/assets/{assetId}/publication-readiness", response_model=StudioAdminPublicationOperationEnvelope, dependencies=[Depends(require_studio_admin_permission(GROWTH_REVIEW))])
+@router.get("/assets/{assetId}/publication-readiness", response_model=StudioAdminPublicationOperationEnvelope, dependencies=[Depends(require_studio_admin_permission(GROWTH_PUBLISH))])
 def get_asset_publication_readiness(
     assetId: str,
     scheduled_at: datetime | None = None,

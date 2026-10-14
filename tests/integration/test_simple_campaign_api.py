@@ -1,6 +1,7 @@
 import os
 from uuid import uuid4
 
+from app.core.config import get_settings
 from app.domain.entities import CampaignRun
 from app.infrastructure.repositories.campaigns import SqlAlchemyCampaignRepository
 from tests.support_auth import auth_headers
@@ -165,6 +166,57 @@ def test_simple_campaign_lifecycle(client) -> None:
     assert publish_final.status_code == 200
     assert publish_final.json()["status"] == "PUBLISHED"
     assert len(publish_final.json()["publications"]) == 6
+
+
+def test_simple_asset_readiness_does_not_require_global_campaign_approval(client) -> None:
+    settings = get_settings()
+    settings.oling_mode = "live"
+    settings.publish_oling_enabled = True
+
+    create_response = client.post(
+        "/studio-simple/campaigns",
+        headers=auth_headers(roles=["ROLE_GROWTH_REVIEW"], jti=str(uuid4())),
+        json={
+            "name": "Publication individuelle",
+            "campaign_type": "OLING",
+            "theme": "DPO externalise",
+            "selected_channels": ["oling_site"],
+        },
+    )
+    assert create_response.status_code == 201
+    campaign_id = create_response.json()["id"]
+    generated_response = client.post(
+        f"/studio-simple/campaigns/{campaign_id}/generate",
+        headers=auth_headers(roles=["ROLE_GROWTH_REVIEW"], jti=str(uuid4())),
+    )
+    assert generated_response.status_code == 200
+    assets = generated_response.json()["content_assets"]
+    fr_asset = next(asset for asset in assets if asset["channel"] == "oling_site" and asset["locale"] == "fr-FR")
+
+    review_response = client.post(
+        f"/studio-simple/campaigns/{campaign_id}/assets/{fr_asset['id']}/review",
+        headers=auth_headers(roles=["ROLE_GROWTH_REVIEW"], jti=str(uuid4())),
+        json={"comment": "FR reviewed", "expected_version": fr_asset["version"]},
+    )
+    assert review_response.status_code == 200
+    reviewed_asset = next(asset for asset in review_response.json()["content_assets"] if asset["id"] == fr_asset["id"])
+    approve_response = client.post(
+        f"/studio-simple/campaigns/{campaign_id}/assets/{fr_asset['id']}/approve",
+        headers=auth_headers(roles=["ROLE_GROWTH_APPROVE"], jti=str(uuid4())),
+        json={"comment": "FR approved", "expected_version": reviewed_asset["version"]},
+    )
+    assert approve_response.status_code == 200
+
+    readiness_response = client.get(
+        f"/api/admin/v1/assets/{fr_asset['id']}/publication-readiness",
+        headers=auth_headers(roles=["ROLE_GROWTH_PUBLISH"], jti=str(uuid4())),
+    )
+    assert readiness_response.status_code == 200
+    readiness = readiness_response.json()["data"]["metadata"]
+    assert readiness["publishable"] is True
+    assert readiness["asset_id"] == fr_asset["id"]
+    assert readiness["approved"] is True
+    assert readiness["hash_matches"] is True
 
 
 def test_simple_campaign_hides_legacy_campaigns(client, session) -> None:

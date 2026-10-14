@@ -169,6 +169,15 @@ def test_mapsi_site_preview_only_mode_blocks_public_publish_but_allows_preview(s
     assert preview["preview_url"].startswith("http://testserver/preview/actualites/")
 
 
+def test_mapsi_site_mock_mode_blocks_public_publish(session) -> None:
+    get_settings.cache_clear()
+    publisher = build_publisher(session, mode="mock")
+    campaign = seed_campaign(session)
+
+    with pytest.raises(CampaignPublicationForbiddenError, match="mock"):
+        publisher.publish(campaign, campaign.content_assets[0])
+
+
 def test_mapsi_site_publish_blocks_on_wrong_asset_type(session) -> None:
     get_settings.cache_clear()
     publisher = build_publisher(session)

@@ -288,6 +288,15 @@ def test_oling_preview_only_mode_blocks_public_publish(session) -> None:
     assert preview["preview_url"].startswith("http://testserver/preview/ressources/")
 
 
+def test_oling_mock_mode_blocks_public_publish(session) -> None:
+    get_settings.cache_clear()
+    publisher = build_publisher(session, mode="mock")
+    campaign = seed_campaign(session)
+
+    with pytest.raises(CampaignPublicationForbiddenError, match="mock"):
+        publisher.publish(campaign, campaign.content_assets[0])
+
+
 def test_oling_dry_run_exposes_requested_and_executed_modes(session) -> None:
     get_settings.cache_clear()
     publisher = build_publisher(session)
@@ -300,17 +309,14 @@ def test_oling_dry_run_exposes_requested_and_executed_modes(session) -> None:
     assert result["preview"]["publisher_type"] == "oling_api"
 
 
-def test_oling_mock_mode_marks_sandbox_execution(session) -> None:
+def test_oling_mock_mode_blocks_public_publish_from_asset_endpoint(session) -> None:
     get_settings.cache_clear()
     publisher = build_publisher(session, mode="mock")
     campaign = seed_campaign(session)
     asset = campaign.content_assets[0]
 
-    result = publisher.publish_asset(campaign.id, asset.id, idempotency_key="sandbox-1")
-
-    assert result["details"]["publication_mode_executed"] == "sandbox"
-    assert result["details"]["publisher_type"] == "oling_mock"
-    assert result["details"]["publication_status"] == "PUBLISHED"
+    with pytest.raises(CampaignPublicationForbiddenError, match="mock"):
+        publisher.publish_asset(campaign.id, asset.id, idempotency_key="sandbox-1")
 
 
 def test_oling_publish_blocks_when_kill_switch_enabled(session) -> None:

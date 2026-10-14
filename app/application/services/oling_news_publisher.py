@@ -294,6 +294,8 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
             raise CampaignPublicationForbiddenError("Oling publication requires an APPROVED asset.")
         if asset.content_hash != asset.approved_content_hash:
             raise CampaignPublicationForbiddenError("Approved content hash no longer matches the current asset.")
+        if self.settings.oling_mode in {"mock", "preview-only"}:
+            raise CampaignPublicationForbiddenError(f"Oling publication mode {self.settings.oling_mode} forbids public publication.")
         if not operational.is_channel_feature_enabled(
             channel="oling",
             static_default=self.settings.publish_oling_enabled,

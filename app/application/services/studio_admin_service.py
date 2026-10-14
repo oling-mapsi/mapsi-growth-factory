@@ -993,7 +993,7 @@ class StudioAdminService:
         scheduled_at: datetime | None = None,
     ) -> StudioAdminPublicationOperation:
         campaign, asset = self._find_asset(asset_id)
-        readiness = self.review_portal_service.publication_readiness(campaign.id, scheduled_at=scheduled_at or asset.scheduled_at)
+        readiness = self._asset_publication_readiness(campaign, asset, scheduled_at=scheduled_at or asset.scheduled_at)
         status = "ready" if readiness.get("publishable") else "blocked"
         return self._publication_operation(
             asset,
@@ -1194,9 +1194,10 @@ class StudioAdminService:
                     metadata=self.mapsi_publisher._serialize(existing),  # type: ignore[attr-defined]
                     use_asset_public_url_fallback=False,
                 )
-        readiness = self.review_portal_service.publication_readiness(campaign.id, scheduled_at=asset.scheduled_at)
+        readiness = self._asset_publication_readiness(campaign, asset, scheduled_at=asset.scheduled_at)
         if not readiness.get("publishable"):
-            raise CampaignPublicationForbiddenError("Asset campaign is not publishable.")
+            reasons = ", ".join(str(item) for item in readiness.get("reasons", []) if item)
+            raise CampaignPublicationForbiddenError(f"Asset is not publishable: {reasons or 'readiness failed'}.")
         if asset.channel == "oling":
             details = self.oling_publisher.publish_asset(campaign.id, asset.id, idempotency_key=idempotency_key)
             payload = dict(details.get("details") or {})
@@ -1287,6 +1288,75 @@ class StudioAdminService:
                 metadata=details,
             )
         raise CampaignPublicationForbiddenError(f"Direct publication is not supported for channel {asset.channel}.")
+
+    def _asset_publication_readiness(
+        self,
+        campaign: CampaignRun,
+        asset: ContentAsset,
+        *,
+        scheduled_at: datetime | None = None,
+    ) -> dict[str, object]:
+        if (campaign.workflow_kind or "").upper() != "SIMPLE":
+            return self.review_portal_service.publication_readiness(campaign.id, scheduled_at=scheduled_at)
+
+        if asset.channel not in {"oling", "mapsi_site"}:
+            return {"publishable": False, "reasons": [f"Unsupported publication channel {asset.channel}."], "asset_id": asset.id}
+
+        asset.ensure_content_hash()
+        mode = self.settings.oling_mode if asset.channel == "oling" else self.settings.mapsi_site_mode
+        connector = self.oling_publisher.connector if asset.channel == "oling" else self.mapsi_publisher.connector
+        config = connector.validate_configuration()
+        feature_enabled = self.channel_state_repository.is_channel_feature_enabled(
+            channel=asset.channel,
+            static_default=self._static_channel_feature_enabled(asset.channel),
+            safe_default_enabled=self.settings.channel_operational_safe_default_enabled,
+        )
+        channel_kill_switch = self.channel_state_repository.is_channel_kill_switch_active(asset.channel)
+        global_kill_switch = self.channel_state_repository.is_global_kill_switch_active(static_default=self.settings.workflow_kill_switch)
+        quality = dict((asset.results or {}).get("editorial_quality") or {})
+        blocking_issues = [
+            issue for issue in quality.get("issues", [])
+            if isinstance(issue, dict) and str(issue.get("severity", "")).lower() in {"error", "blocking"}
+        ]
+        quality_blocking = quality.get("passed") is False or bool(blocking_issues)
+        body = (asset.content_html or asset.body or asset.content_text).strip()
+        reasons: list[str] = []
+        if asset.status is not AssetStatus.APPROVED:
+            reasons.append("Asset is not approved.")
+        if not asset.approved_content_hash or asset.content_hash != asset.approved_content_hash:
+            reasons.append("Approved content hash no longer matches the current asset.")
+        if quality_blocking:
+            reasons.append("Blocking editorial quality issues remain.")
+        if mode in {"mock", "preview-only"}:
+            reasons.append(f"Publication mode {mode} forbids public publication.")
+        if not feature_enabled:
+            reasons.append(f"Publication is disabled for {asset.channel}.")
+        if channel_kill_switch:
+            reasons.append("Channel publication kill switch is active.")
+        if global_kill_switch:
+            reasons.append("Global publication kill switch is active.")
+        if not config.get("configured"):
+            reasons.append(f"Connector configuration is incomplete: {', '.join(config.get('missing', []))}.")
+        if not asset.title.strip() or not body:
+            reasons.append("Article title and body are required.")
+
+        return {
+            "workflow_kind": campaign.workflow_kind,
+            "asset_id": asset.id,
+            "channel": asset.channel,
+            "locale": asset.locale,
+            "publishable": not reasons,
+            "reasons": reasons,
+            "mode": mode,
+            "connector_configured": bool(config.get("configured")),
+            "feature_enabled": feature_enabled,
+            "channel_kill_switch": channel_kill_switch,
+            "global_kill_switch": global_kill_switch,
+            "approved": asset.status is AssetStatus.APPROVED,
+            "hash_matches": bool(asset.approved_content_hash and asset.content_hash == asset.approved_content_hash),
+            "quality_blocking": quality_blocking,
+            "public_url": asset.external_publication_url or "",
+        }
 
     def retry_asset_publication(
         self,

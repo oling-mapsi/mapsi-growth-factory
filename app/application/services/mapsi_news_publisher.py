@@ -217,6 +217,8 @@ class MapsiNewsPublisher:
             raise CampaignPublicationForbiddenError("Mapsi Site publication requires an APPROVED asset.")
         if asset.content_hash != asset.approved_content_hash:
             raise CampaignPublicationForbiddenError("Approved content hash no longer matches the current asset.")
+        if self.settings.mapsi_site_mode in {"mock", "preview-only"}:
+            raise CampaignPublicationForbiddenError(f"Mapsi Site publication mode {self.settings.mapsi_site_mode} forbids public publication.")
         if not operational.is_channel_feature_enabled(channel="mapsi_site", static_default=self.settings.publish_mapsi_site_enabled, safe_default_enabled=self.settings.channel_operational_safe_default_enabled):
             raise CampaignPublicationForbiddenError("PUBLISH_MAPSI_SITE_ENABLED is false.")
         if operational.is_channel_kill_switch_active("mapsi_site"):
