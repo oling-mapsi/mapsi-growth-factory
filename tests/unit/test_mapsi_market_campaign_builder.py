@@ -16,6 +16,8 @@ def _builder(session) -> MapsiMarketCampaignBuilder:
 
 
 def _seed_product_change(session, *, capability_key: str, summary: str) -> str:
+    from tests.support_sources import ensure_repository_source
+    ensure_repository_source(session,'repo-1','mapsi/mapsi-v6')
     change = ProductChange(
         repository_source_id="repo-1",
         repository_full_name="mapsi/mapsi-v6",

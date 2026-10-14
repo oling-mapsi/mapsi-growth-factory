@@ -403,20 +403,25 @@ class OlingNewsPublisher(OlingSiteConnectorPort):
         self.publication_repository.save(publication)
 
     def _payload_for(self, campaign: CampaignRun, asset: ContentAsset) -> dict[str, Any]:
+        seo = dict((asset.results.get('seo_geo') or {}).get('metadata') or {})
+        existing = self.publication_repository.get_latest_for_asset(asset.id)
+        slug = existing.public_slug if existing and existing.public_slug else seo.get('slug') or self._slugify(asset.title)
         excerpt = asset.excerpt or asset.content_text[:280]
         content_html = asset.content_html or asset.body or f"<p>{asset.content_text}</p>"
+        from app.application.services.growth_publication_media import prepare_publication_media
+        content_html, featured_image = prepare_publication_media(asset, self.connector, content_html, correlation_id=self._correlation_id(campaign, asset, "media"))
         return {
             "external_id": self._remote_external_id(campaign, asset),
             "title": asset.title,
-            "slug": self._slugify(asset.title),
+            "slug": slug,
             "locale": self._oling_locale(asset.locale),
             "content_group_id": campaign.id,
             "excerpt": excerpt,
             "content_html": content_html,
-            "meta_title": asset.title,
-            "meta_description": excerpt,
-            "canonical_url": self._public_url_for_slug(self._slugify(asset.title), self._oling_locale(asset.locale)),
-            "featured_image": None,
+            "meta_title": seo.get('seo_title') or asset.title,
+            "meta_description": seo.get('meta_description') or excerpt,
+            "canonical_url": self._public_url_for_slug(slug, self._oling_locale(asset.locale)),
+            "featured_image": featured_image,
             "categories": [],
             "tags": [],
             "publication_date": (asset.scheduled_at or utcnow()).isoformat(),

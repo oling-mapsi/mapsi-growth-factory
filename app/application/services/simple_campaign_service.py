@@ -70,6 +70,7 @@ class UpdateSimpleAssetCommand:
     content_html: str | None = None
     content_text: str | None = None
     expected_version: int | None = None
+    image_placement: str | None = None
 
 
 @dataclass
@@ -210,7 +211,19 @@ class SimpleCampaignService:
         )
         return saved
 
-    def generate_asset_image(self, campaign_id: str, asset_id: str, command: GenerateSimpleImageCommand) -> CampaignRun:
+    def enqueue_asset_image(self, campaign_id: str, asset_id: str, command: GenerateSimpleImageCommand) -> CampaignRun:
+        campaign = self.get_campaign(campaign_id)
+        asset = self._find_asset(campaign, asset_id)
+        asset.assert_expected_version(command.expected_version)
+        if self.generation_jobs is None:
+            raise InvalidStateTransitionError("Illustration worker is unavailable.")
+        parameters = {'operation': 'image', 'asset_id': asset_id, 'expected_version': command.expected_version, 'visual_brief': command.visual_brief}
+        job = self.generation_jobs.ensure_pending(campaign_id, parameters=parameters)
+        if {key:value for key,value in (job.parameters or {}).items() if key != 'generated_image'} != parameters:
+            raise InvalidStateTransitionError("Another editorial job is already running for this campaign.")
+        return campaign
+
+    def generate_asset_image(self, campaign_id: str, asset_id: str, command: GenerateSimpleImageCommand, *, job_id: str | None = None) -> CampaignRun:
         if self.image_service is None:
             raise InvalidStateTransitionError("Image generation is not configured.")
         campaign = self.get_campaign(campaign_id)
@@ -218,12 +231,31 @@ class SimpleCampaignService:
         if command.expected_version is not None:
             asset.assert_expected_version(command.expected_version)
         external_channel = self.external_channel(asset.channel)
-        result = self.image_service.generate(
+        from app.application.services.growth_image_generation import GrowthImageResult
+        from app.infrastructure.db.models import SimpleGenerationJobModel
+        job = self.repository.session.get(SimpleGenerationJobModel, job_id) if job_id else None
+        retained_image = (job.parameters or {}).get('generated_image') if job else None
+        result = GrowthImageResult(**retained_image, data_url='') if retained_image else self.image_service.generate(
             channel=external_channel,
             title=asset.title,
+            locale=asset.locale or 'fr-FR',
             content_text=asset.content_text,
             visual_brief=command.visual_brief or str((asset.results or {}).get("illustration_suggestion", "")),
         )
+        if job is not None and not retained_image:
+            from dataclasses import asdict
+            reference = asdict(result)
+            reference.pop('data_url', None)
+            job.parameters = {**job.parameters, 'generated_image': reference}
+            self.repository.session.commit()
+        self._refresh_progress_state(campaign)
+        campaign = self.get_campaign(campaign_id)
+        asset = self._find_asset(campaign, asset_id)
+        if command.expected_version is not None:
+            asset.assert_expected_version(command.expected_version)
+        from app.infrastructure.repositories.asset_revisions import AssetRevisionRepository
+        if getattr(self.repository, "session", None) is not None:
+            AssetRevisionRepository(self.repository.session).snapshot_asset(asset)
         asset.results = dict(asset.results or {})
         asset.results["image"] = {
             "model": result.model,
@@ -235,6 +267,8 @@ class SimpleCampaignService:
             "duration_ms": result.duration_ms,
             "tokens": result.tokens,
         }
+        from app.application.services.growth_article_media import attach_illustration
+        asset.update_draft(content_html=attach_illustration(asset.content_html or asset.body, asset_id=asset.id, alt=result.alt_text), content_text=asset.content_text)
         saved = self.repository.save(campaign)
         self.audit_log.append(
             saved.id,
@@ -262,6 +296,36 @@ class SimpleCampaignService:
                         return resolved, media_type, str(image.get("alt_text") or "")
                 return None, "", str(image.get("data_url") or "")
         raise CampaignNotFoundError(f"Asset {asset_id} not found.")
+
+    def enqueue_asset_repair(self, campaign_id: str, asset_id: str, expected_version: int) -> CampaignRun:
+        campaign = self.get_campaign(campaign_id)
+        asset = self._find_asset(campaign, asset_id)
+        asset.assert_expected_version(expected_version)
+        if self.generation_jobs is None:
+            raise InvalidStateTransitionError("Editorial repair worker is unavailable.")
+        parameters = {'operation': 'repair', 'asset_id': asset_id, 'expected_version': expected_version}
+        job = self.generation_jobs.ensure_pending(campaign_id, parameters=parameters)
+        if job.parameters != parameters:
+            raise InvalidStateTransitionError("Another editorial job is already running for this campaign.")
+        campaign.status = CampaignStatus.GENERATING
+        return self.repository.save(campaign)
+
+    def run_asset_repair(self, campaign_id: str, asset_id: str, expected_version: int, *, stage_callback=None) -> CampaignRun:
+        from app.application.services.editorial_production_v1 import EditorialAssetMutationService
+        from app.infrastructure.repositories.asset_revisions import AssetRevisionRepository
+        campaign = self.get_campaign(campaign_id)
+        asset = self._find_asset(campaign, asset_id)
+        if self.editorial_service is None:
+            raise InvalidStateTransitionError("Editorial repair provider is unavailable.")
+        if stage_callback:
+            stage_callback(f"{self.external_channel(asset.channel)}:{asset.locale}:REWRITING")
+        mutation = EditorialAssetMutationService(editorial_service=self.editorial_service, campaign_repository=self.repository,
+            revision_repository=AssetRevisionRepository(self.repository.session), audit_repository=self.audit_log)
+        mutation.regenerate(asset_id, actor='oling-editorial-worker', expected_version=expected_version,
+            instruction="Corriger les anomalies editoriales de cet article uniquement. Ne conserver que des affirmations etayees par les sources fournies.", targeted_repair=True)
+        if stage_callback:
+            stage_callback(f"{self.external_channel(asset.channel)}:{asset.locale}:QUALITY_CHECK")
+        return self.get_campaign(campaign_id)
 
     def prepare_asset_seo_geo(self, campaign_id: str, asset_id: str, expected_version: int | None = None) -> CampaignRun:
         campaign = self.get_campaign(campaign_id)
@@ -355,6 +419,7 @@ class SimpleCampaignService:
         try:
             brief, assets, evidence = self._build_generation_payload(campaign, stage_callback=stage_callback)
         except Exception as exc:
+            self._refresh_progress_state(campaign)
             campaign.status = CampaignStatus.FAILED
             saved = self.repository.save(campaign)
             duration_ms = max(1, int((time.perf_counter() - started) * 1000))
@@ -374,11 +439,14 @@ class SimpleCampaignService:
                 duration_ms=duration_ms,
             )
             raise
+        self._refresh_progress_state(campaign)
         campaign = self.repository.get(campaign.id) or campaign
         existing_evidence_ids = {item.id for item in campaign.source_evidences}
         campaign.source_evidences.extend([item for item in evidence if item.id not in existing_evidence_ids])
         merged_assets = self._merge_generated_assets(campaign.content_assets, assets)
         campaign.mark_generated(brief, merged_assets)
+        # mark_generated normalizes fresh assets; completed drafts keep their exact state.
+        campaign.content_assets = merged_assets
         campaign._sync_status_from_assets()
         saved = self.repository.save(campaign)
         duration_ms = max(1, int((time.perf_counter() - started) * 1000))
@@ -407,7 +475,7 @@ class SimpleCampaignService:
             existing = self._existing_generated_article_asset(campaign, "mapsi_site", "fr-FR")
             if existing is None:
                 if stage_callback:
-                    stage_callback("DRAFTING_FR")
+                    stage_callback("mapsi_site:fr-FR:DRAFTING")
                 mapsi_context = self._build_mapsi_context(campaign, destination_site="mapsi.fr", article_type="MAPSI_PRODUCT")
                 if is_regeneration or campaign.content_assets:
                     mapsi_context.published_topic_history = []
@@ -415,7 +483,7 @@ class SimpleCampaignService:
                     context=mapsi_context,
                     selection=self._mapsi_selection(campaign),
                     allow_failed_quality=True,
-                    progress_callback=stage_callback,
+                    progress_callback=(lambda stage: stage_callback(f"mapsi_site:fr-FR:{stage}")) if stage_callback else None,
                 )
                 evidence = self._collect_editorial_evidence(campaign.id, [results["mapsi_site"].context])
                 self._save_progressive_article_asset(
@@ -428,7 +496,7 @@ class SimpleCampaignService:
                 existing = self._existing_generated_article_asset(campaign, "oling_site", locale)
                 if existing is None:
                     if stage_callback:
-                        stage_callback(f"DRAFTING_{locale[:2].upper()}")
+                        stage_callback(f"oling_site:{locale}:DRAFTING")
                     if campaign.campaign_type == "OLING":
                         oling_context = self._build_oling_context(campaign, locale=locale)
                         selection = self._oling_selection(campaign)
@@ -446,7 +514,7 @@ class SimpleCampaignService:
                         context=oling_context,
                         selection=selection,
                         allow_failed_quality=True,
-                        progress_callback=stage_callback,
+                        progress_callback=(lambda stage, active_locale=locale: stage_callback(f"oling_site:{active_locale}:{stage}")) if stage_callback else None,
                     )
                     evidence = self._collect_editorial_evidence(campaign.id, [results[f"oling_site:{locale}"].context])
                     self._save_progressive_article_asset(
@@ -522,6 +590,7 @@ class SimpleCampaignService:
         return None
 
     def _save_progressive_article_asset(self, campaign: CampaignRun, asset: ContentAsset, evidence: list[SourceEvidence]) -> None:
+        self._refresh_progress_state(campaign)
         asset.status = AssetStatus.READY_FOR_REVIEW
         existing_assets = [
             item
@@ -533,20 +602,55 @@ class SimpleCampaignService:
         campaign.content_assets = existing_assets
         existing_evidence_ids = {item.id for item in campaign.source_evidences}
         campaign.source_evidences.extend([item for item in evidence if item.id not in existing_evidence_ids])
-        campaign._sync_status_from_assets()
+        campaign.status = CampaignStatus.GENERATING
         self.repository.save(campaign)
+
+    def _refresh_progress_state(self, campaign: CampaignRun) -> None:
+        session = getattr(self.repository, 'session', None)
+        if session is not None:
+            session.commit()
+            session.expire_all()
+        latest = self.repository.get(campaign.id)
+        if latest is not None:
+            for name in ('content_assets','source_evidences','approval_decisions','publications','editorial_briefs'):
+                setattr(campaign,name,getattr(latest,name))
 
     def update_asset(self, campaign_id: str, asset_id: str, command: UpdateSimpleAssetCommand) -> CampaignRun:
         campaign = self.get_campaign(campaign_id)
         self._assert_simple_campaign(campaign)
         asset = self._find_asset(campaign, asset_id)
+        if self.generation_jobs is not None:
+            job = self.generation_jobs.latest_for_campaign(campaign_id)
+            if job and job.status in {'PENDING','RUNNING'} and (job.parameters or {}).get('asset_id') == asset_id:
+                raise InvalidStateTransitionError("This article is being repaired; wait until the worker finishes.")
         if command.expected_version is not None:
             asset.assert_expected_version(command.expected_version)
+        from app.infrastructure.repositories.asset_revisions import AssetRevisionRepository
+        if getattr(self.repository, "session", None) is not None:
+            AssetRevisionRepository(self.repository.session).snapshot_asset(asset)
+        content_html = HtmlSanitizer.sanitize(command.content_html)
+        from bs4 import BeautifulSoup
+        old_visible = ' '.join(BeautifulSoup(asset.content_html or '', 'html.parser').stripped_strings)
+        new_visible = ' '.join(BeautifulSoup(content_html or asset.content_html or '', 'html.parser').stripped_strings)
+        text_changed = old_visible != new_visible if content_html is not None else (command.content_text is not None and command.content_text != asset.content_text)
+        image = dict((asset.results or {}).get("image") or {})
+        if image:
+            from app.application.services.growth_article_media import attach_illustration
+            placement = command.image_placement or image.get("placement", "after_intro")
+            if placement not in {"after_intro", "after_heading", "end"}:
+                raise InvalidStateTransitionError("Invalid illustration placement.")
+            content_html = attach_illustration(content_html if content_html is not None else asset.content_html, asset_id=asset.id, alt=str(image.get("alt_text") or asset.title), placement=placement)
+            asset.results = {**asset.results, "image": {**image, "placement": placement}}
         asset.update_draft(
             title=command.title,
-            content_html=HtmlSanitizer.sanitize(command.content_html),
-            content_text=command.content_text,
+            content_html=content_html,
+            content_text=BeautifulSoup(content_html, 'html.parser').get_text('\n',strip=True) if content_html is not None else command.content_text,
         )
+        if text_changed and asset.results.get('editorial_article'):
+            quality = dict(asset.results.get('editorial_quality') or {})
+            quality['passed'] = False
+            quality['issues'] = list(quality.get('issues') or []) + [{'code':'manual_content_changed','severity':'error','message':'Le texte a change : verifier les affirmations de cette nouvelle version.'}]
+            asset.results = {**asset.results,'editorial_quality':quality}
         campaign._sync_status_from_assets()
         saved = self.repository.save(campaign)
         self.audit_log.append(
@@ -587,6 +691,10 @@ class SimpleCampaignService:
         campaign = self.get_campaign(campaign_id)
         self._assert_simple_campaign(campaign)
         asset = self._find_asset(campaign, asset_id)
+        if self.generation_jobs is not None:
+            job = self.generation_jobs.latest_for_campaign(campaign_id)
+            if job and job.status in {'PENDING','RUNNING'} and (job.parameters or {}).get('asset_id') == asset_id:
+                raise InvalidStateTransitionError("Editorial repair is still running for this article.")
         if command.expected_version is not None:
             asset.assert_expected_version(command.expected_version)
         if asset.status not in {AssetStatus.REVIEWED, AssetStatus.READY_FOR_REVIEW, AssetStatus.APPROVED}:
@@ -979,6 +1087,8 @@ class SimpleCampaignService:
                 ]
             )
             score = len(theme_tokens.intersection(self._tokens(haystack))) * 10
+            if practice.practice_id.casefold() in theme_tokens:
+                score += 100
             ranked.append((score, practice))
         ranked.sort(key=lambda item: item[0], reverse=True)
         return ranked[0][1]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -397,7 +398,7 @@ class EditorialAssetMutationService:
         self.revision_repository = revision_repository
         self.audit_repository = audit_repository
 
-    def regenerate(self, asset_id: str, *, actor: str, expected_version: int, instruction: str = "", desired_title: str = "", length_directive: str = "", angle_directive: str = "") -> ContentAsset:
+    def regenerate(self, asset_id: str, *, actor: str, expected_version: int, instruction: str = "", desired_title: str = "", length_directive: str = "", angle_directive: str = "", targeted_repair: bool = False) -> ContentAsset:
         campaign, asset = self._find(asset_id)
         asset.assert_expected_version(expected_version)
         context_payload = dict(asset.results.get("builder_context") or {})
@@ -413,10 +414,27 @@ class EditorialAssetMutationService:
             if publication_channel:
                 context_payload["publication_channel"] = publication_channel
         context = EditorialGenerationContext.model_validate(context_payload)
-        result = self.editorial_service.generate_from_context(context=context, allow_failed_quality=True)
+        draft = None
+        if targeted_repair:
+            from app.application.models.editorial_v1 import EditorialArticle
+            draft = EditorialArticle.model_validate(asset.results.get("editorial_article") or {})
+            draft = draft.model_copy(update={"title": asset.title, "body_html": asset.content_html, "body_text": asset.content_text})
+            context.rewrite_instruction = instruction + "\nCorriger uniquement les anomalies de cet article existant, en conservant sa langue et son sujet. Anomalies: " + json.dumps(asset.results.get("editorial_quality") or {}, ensure_ascii=False)
+        result = self.editorial_service.generate_from_context(context=context, allow_failed_quality=True, draft_article=draft)
+        session = getattr(self.campaign_repository, 'session', None)
+        if session is not None:
+            session.commit()
+            session.expire_all()
+            campaign, asset = self._find(asset_id)
+            asset.assert_expected_version(expected_version)
+        body_html = result.record.article.body_html
+        image = dict(asset.results.get("image") or {})
+        if image:
+            from app.application.services.growth_article_media import attach_illustration
+            body_html = attach_illustration(body_html, asset_id=asset.id, alt=str(image.get("alt_text") or asset.title), placement=image.get("placement", "after_intro"))
         asset.update_draft(
             title=result.record.article.title,
-            content_html=result.record.article.body_html,
+            content_html=body_html,
             content_text=result.record.article.body_text,
             excerpt=result.record.article.excerpt,
             call_to_action=result.record.article.call_to_action_label,

@@ -54,6 +54,8 @@ def seed_segment_data(session) -> None:
 
 
 def seed_product_data(session) -> None:
+    from tests.support_sources import ensure_repository_source
+    ensure_repository_source(session,'repo-1','mapsi/mapsi-v6')
     changes = SqlAlchemyProductChangeRepository(session)
     evidences = SqlAlchemySourceEvidenceRepository(session)
     change = ProductChange(

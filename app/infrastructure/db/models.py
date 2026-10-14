@@ -118,6 +118,7 @@ class SimpleGenerationJobModel(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     campaign_run_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    parameters: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
     stage: Mapped[str] = mapped_column(String(32), nullable=False, default="WAITING")
     error_type: Mapped[str] = mapped_column(String(128), nullable=False, default="")

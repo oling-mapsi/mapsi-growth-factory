@@ -302,18 +302,26 @@ class MapsiNewsPublisher:
         self.publication_repository.save(publication)
 
     def _payload_for(self, campaign: CampaignRun, asset: ContentAsset) -> dict[str, Any]:
+        if asset.locale not in {'', 'fr', 'fr-FR'}:
+            raise CampaignPublicationForbiddenError("MAPSI publication is French only.")
+        seo = dict((asset.results.get('seo_geo') or {}).get('metadata') or {})
+        existing = self.publication_repository.get_latest_for_asset(asset.id)
+        slug = existing.public_slug if existing and existing.public_slug else seo.get('slug') or self._slugify(asset.title)
         excerpt = asset.excerpt or asset.content_text[:280]
         content_html = asset.content_html or asset.body or f"<p>{asset.content_text}</p>"
+        from app.application.services.growth_publication_media import prepare_publication_media
+        content_html, featured_image = prepare_publication_media(asset, self.connector, content_html, correlation_id=self._correlation_id(campaign, asset, "media"))
         return {
             "external_id": asset.id,
             "title": asset.title,
-            "slug": self._slugify(asset.title),
+            "slug": slug,
             "locale": "fr",
             "excerpt": excerpt,
             "content_html": content_html,
-            "meta_title": asset.title,
-            "meta_description": excerpt,
-            "canonical_url": f"{self.settings.mapsi_site_public_base_url.rstrip('/')}/fr/actualites/{self._slugify(asset.title)}",
+            "featured_image": featured_image,
+            "meta_title": seo.get('seo_title') or asset.title,
+            "meta_description": seo.get('meta_description') or excerpt,
+            "canonical_url": f"{self.settings.mapsi_site_public_base_url.rstrip('/')}/actualites/{slug}",
             "categories": ["growth"],
             "tags": ["mapsi", "growth"],
             "publication_date": (asset.scheduled_at or utcnow()).isoformat(),

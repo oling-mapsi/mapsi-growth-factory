@@ -16,6 +16,8 @@ from app.knowledge import KnowledgeRepository
 
 
 def _seed_recent_product_change(session, *, change_id: str = "pc-1", summary: str = "Export du tableau utilisateur") -> None:
+    from tests.support_sources import ensure_repository_source
+    ensure_repository_source(session,'source-1','oling-mapsi/mapsi-v6')
     session.add(
         ProductChangeModel(
             id=change_id,

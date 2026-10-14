@@ -128,6 +128,9 @@ class MapsiSiteConnector:
     def create_draft(self, payload: dict[str, Any], *, correlation_id: str) -> dict[str, Any]:
         return self._parse_article(self._request("POST", "/api/growth/news", json=payload, correlation_id=correlation_id))
 
+    def import_media(self, payload: dict[str, Any], *, correlation_id: str) -> dict[str, Any]:
+        return self._request("POST", "/api/growth/news/media", json=payload, correlation_id=correlation_id).json()
+
     def update_draft(self, external_id: str, payload: dict[str, Any], *, correlation_id: str) -> dict[str, Any]:
         return self._parse_article(self._request("PATCH", f"/api/growth/news/{external_id}", json=payload, correlation_id=correlation_id))
 

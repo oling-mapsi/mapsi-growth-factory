@@ -31,6 +31,8 @@ def test_knowledge_repository_loads_versioned_assets(session) -> None:
 
 
 def test_knowledge_repository_reads_product_changes_and_topic_history(session) -> None:
+    from tests.support_sources import ensure_repository_source
+    ensure_repository_source(session,'source-1','oling-mapsi/mapsi-v6')
     session.add(
         ProductChangeModel(
             id="pc-1",

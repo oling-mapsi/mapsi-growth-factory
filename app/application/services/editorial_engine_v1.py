@@ -56,7 +56,7 @@ EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECAS
 TOKEN_RE = re.compile(r"\b(?:sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|[A-Za-z0-9_-]{24,}\.[A-Za-z0-9._-]{8,})\b")
 SCRIPT_RE = re.compile(r"<\s*(script|iframe)\b", re.IGNORECASE)
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-CLIENT_RE = re.compile(r"\b(?:acme|client [a-z0-9_-]+|chez (?!oling\b)[a-z0-9_-]+)\b", re.IGNORECASE)
+CLIENT_RE = re.compile(r"\b(?:acme|client (?!(?:teams|stakeholders|organizations|requirements|needs|business|processes|data|roles)\b)[a-z0-9_-]+|chez (?!oling\b)[a-z0-9_-]+)\b", re.IGNORECASE)
 GENERIC_PHRASE_RE = re.compile(
     r"(dans un monde en constante evolution|il est essentiel de|solution innovante|revolutionnaire|levier incontournable)",
     re.IGNORECASE,
@@ -168,6 +168,19 @@ class OpenAIEditorialGenerator(EditorialGeneratorInterface):
             output_hash=output_hash,
             estimated_cost_usd=estimated_cost_usd,
         )
+
+    def rewrite_existing(self, article: EditorialArticle, context: EditorialGenerationContext) -> EditorialGenerationEnvelope:
+        draft = EditorialArticleRewriteContext(editorial_context=context, draft_article=article)
+        result = self.run_structured_output(
+            agent_name="EditorialArticleRewriteAgent",
+            prompt=self._build_rewrite_prompt(context),
+            input_model=draft,
+            output_type=EditorialArticle,
+            prompt_version=EDITORIAL_REWRITE_PROMPT_VERSION,
+        )
+        return EditorialGenerationEnvelope(article=cast(EditorialArticle, result.output), metadata=result.metadata,
+            duration_ms=result.duration_ms, input_hash=sha256_hexdigest(draft.model_dump_json()),
+            output_hash=sha256_hexdigest(result.output.model_dump_json()), estimated_cost_usd=result.estimated_cost_usd)
 
     def run_structured_output(
         self,
@@ -537,8 +550,14 @@ class EditorialGenerationService:
         selection: EditorialBuilderSelection | None = None,
         allow_failed_quality: bool = False,
         progress_callback=None,
+        draft_article: EditorialArticle | None = None,
     ) -> EditorialGenerationResult:
-        envelope = self.generator.generate(context, progress_callback=progress_callback)
+        if draft_article is not None:
+            if not isinstance(self.generator, OpenAIEditorialGenerator):
+                raise EditorialGenerationBlockedError("Targeted editorial repair requires the real editorial provider.")
+            envelope = self.generator.rewrite_existing(draft_article, context)
+        else:
+            envelope = self.generator.generate(context, progress_callback=progress_callback)
         if progress_callback:
             progress_callback("QUALITY_CHECK")
         quality = self.validator.validate(envelope.article, context)

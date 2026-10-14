@@ -61,6 +61,7 @@ def _response(service: SimpleCampaignService, campaign, *, include_image_data: b
                 "error_message": job.error_message,
                 "attempts": job.attempts,
                 "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+                "asset_id": (job.parameters or {}).get('asset_id'),
             }
     return SimpleCampaignResponse(
         id=campaign.id,
@@ -179,6 +180,18 @@ def generate_campaign(
         raise _to_http_error(exc) from exc
 
 
+@router.post("/campaigns/{campaign_id}/assets/{asset_id}/repair", response_model=SimpleCampaignResponse, status_code=202)
+def repair_asset(campaign_id: str, asset_id: str, payload: SimpleAssetDecisionRequest,
+                 principal: StudioAdminPrincipal = Depends(require_studio_admin_permission(GROWTH_REVIEW)),
+                 service: SimpleCampaignService = Depends(get_simple_campaign_service)):
+    if payload.expected_version is None:
+        raise HTTPException(status_code=422, detail="expected_version is required.")
+    try:
+        return _response(service, service.enqueue_asset_repair(campaign_id, asset_id, payload.expected_version))
+    except DomainError as exc:
+        raise _to_http_error(exc) from exc
+
+
 @router.put("/campaigns/{campaign_id}/assets/{asset_id}", response_model=SimpleCampaignResponse)
 def update_asset(
     campaign_id: str,
@@ -194,6 +207,7 @@ def update_asset(
                 campaign_id,
                 asset_id,
                 UpdateSimpleAssetCommand(
+                    image_placement=payload.image_placement,
                     title=payload.title,
                     content_html=payload.content_html,
                     content_text=payload.content_text,
@@ -247,7 +261,7 @@ def approve_asset(
         raise _to_http_error(exc) from exc
 
 
-@router.post("/campaigns/{campaign_id}/assets/{asset_id}/image", response_model=SimpleCampaignResponse)
+@router.post("/campaigns/{campaign_id}/assets/{asset_id}/image", response_model=SimpleCampaignResponse, status_code=202)
 def generate_asset_image(
     campaign_id: str,
     asset_id: str,
@@ -255,10 +269,12 @@ def generate_asset_image(
     principal: StudioAdminPrincipal = Depends(require_studio_admin_permission(GROWTH_REVIEW)),
     service: SimpleCampaignService = Depends(get_simple_campaign_service),
 ) -> SimpleCampaignResponse:
+    if payload.expected_version is None:
+        raise HTTPException(status_code=422, detail="expected_version is required for illustration generation.")
     try:
         return _response(
             service,
-            service.generate_asset_image(
+            service.enqueue_asset_image(
                 campaign_id,
                 asset_id,
                 GenerateSimpleImageCommand(visual_brief=payload.visual_brief, expected_version=payload.expected_version),

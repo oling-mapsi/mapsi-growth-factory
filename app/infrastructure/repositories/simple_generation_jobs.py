@@ -19,11 +19,13 @@ class SimpleGenerationJobRepository:
         return (
             self.session.query(SimpleGenerationJobModel)
             .filter(SimpleGenerationJobModel.campaign_run_id == campaign_id)
-            .order_by(SimpleGenerationJobModel.created_at.desc())
+            .order_by(SimpleGenerationJobModel.status.in_(ACTIVE_STATUSES).desc(), SimpleGenerationJobModel.updated_at.desc(), SimpleGenerationJobModel.created_at.desc(), SimpleGenerationJobModel.id.desc())
             .first()
         )
 
-    def ensure_pending(self, campaign_id: str, *, stale_after_seconds: int = 600) -> SimpleGenerationJobModel:
+    def ensure_pending(self, campaign_id: str, *, stale_after_seconds: int = 600, parameters: dict | None = None) -> SimpleGenerationJobModel:
+        from app.infrastructure.db.models import CampaignRunModel
+        self.session.query(CampaignRunModel).filter(CampaignRunModel.id == campaign_id).with_for_update().first()
         latest = self.latest_for_campaign(campaign_id)
         now = datetime.now(UTC)
         if latest and latest.status == "RUNNING" and self._is_stale(latest, now, stale_after_seconds):
@@ -37,7 +39,8 @@ class SimpleGenerationJobRepository:
             return latest
         if latest and latest.status in ACTIVE_STATUSES:
             return latest
-        if latest and latest.status == "FAILED":
+        identity = {key: value for key, value in (latest.parameters or {}).items() if key != 'generated_image'} if latest else {}
+        if latest and latest.status == "FAILED" and (identity or None) == (parameters or None):
             latest.status = "PENDING"
             latest.stage = "WAITING"
             latest.error_type = ""
@@ -49,6 +52,7 @@ class SimpleGenerationJobRepository:
         job = SimpleGenerationJobModel(
             id=str(uuid4()),
             campaign_run_id=campaign_id,
+            parameters=parameters,
             status="PENDING",
             stage="WAITING",
             error_type="",
@@ -69,6 +73,11 @@ class SimpleGenerationJobRepository:
         if updated_at.tzinfo is None:
             updated_at = updated_at.replace(tzinfo=UTC)
         return updated_at < now - timedelta(seconds=stale_after_seconds)
+
+    def heartbeat(self, job_id: str) -> None:
+        with Session(bind=self.session.get_bind()) as session:
+            session.query(SimpleGenerationJobModel).filter(SimpleGenerationJobModel.id == job_id, SimpleGenerationJobModel.status == 'RUNNING').update({'updated_at': datetime.now(UTC)})
+            session.commit()
 
     def claim_next(self) -> SimpleGenerationJobModel | None:
         job = (
@@ -115,7 +124,8 @@ class SimpleGenerationJobRepository:
             return
         now = datetime.now(UTC)
         job.status = "FAILED"
-        job.stage = "FAILED"
+        parts = job.stage.split(':')
+        job.stage = ':'.join(parts[:-1] + ['FAILED']) if len(parts) == 3 else 'FAILED'
         job.error_type = type(exc).__name__
         job.error_message = str(exc)[:4000]
         job.updated_at = now

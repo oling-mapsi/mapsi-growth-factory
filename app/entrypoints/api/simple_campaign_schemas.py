@@ -22,6 +22,7 @@ class SimpleAssetUpdateRequest(BaseModel):
     content_html: str | None = None
     content_text: str | None = None
     expected_version: int | None = None
+    image_placement: str | None = None
 
 
 class SimpleAssetDecisionRequest(BaseModel):

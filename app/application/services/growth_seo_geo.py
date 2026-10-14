@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 import unicodedata
 
 import httpx
+from bs4 import BeautifulSoup, NavigableString
+from app.application.services.growth_page_catalog import PublicPageCatalog
 
 
 @dataclass(frozen=True)
@@ -18,6 +20,8 @@ class GrowthSeoGeoResult:
 
 
 class GrowthSeoGeoService:
+    def __init__(self, catalog=None):
+        self.catalog = catalog or PublicPageCatalog()
     OILING_LINKS = {
         "fr-FR": [
             {"label": "Ressources OLING", "url": "https://oling.fr/ressources"},
@@ -40,8 +44,10 @@ class GrowthSeoGeoService:
 
     def prepare(self, *, channel: str, title: str, html: str, text: str, image_alt: str = "", locale: str = "fr-FR", public_url: str = "") -> GrowthSeoGeoResult:
         slug = self._slugify(title)
-        links = self._verified_links(self.MAPSI_LINKS if channel == "mapsi_site" else self.OILING_LINKS.get(locale, self.OILING_LINKS["fr-FR"]))
+        links = self.catalog.candidates(channel=channel, locale=locale, title=title, text=text)
         enriched_html = self._insert_links(html, links)
+        inserted = BeautifulSoup(enriched_html, 'html.parser')
+        links = [link for link in links if inserted.find('a',href=link['url'])]
         canonical = public_url.strip() or self._canonical_url(channel=channel, locale=locale, slug=slug)
         metadata = {
             "h1": title,
@@ -81,15 +87,20 @@ class GrowthSeoGeoService:
         return verified[:4]
 
     def _insert_links(self, html: str, links: list[dict]) -> str:
-        if not links or "A lire aussi" in html or "Read also" in html or "También puede leer" in html:
-            return html
-        heading = "A lire aussi"
-        if any("/en/" in str(link.get("final_url", "")) for link in links):
-            heading = "Read also"
-        elif any("/es/" in str(link.get("final_url", "")) for link in links):
-            heading = "También puede leer"
-        items = "".join(f'<li><a href="{link["final_url"]}">{link["label"]}</a></li>' for link in links[:3])
-        return html.rstrip() + f"<h2>{heading}</h2><ul>{items}</ul>"
+        soup = BeautifulSoup(html, 'html.parser')
+        for link in links:
+            if soup.find('a',href=link['url']): continue
+            anchor = link.get('anchor','')
+            if not anchor: continue
+            for node in list(soup.find_all(string=True)):
+                if node.find_parent('a') or node.parent.name not in {'p','li','strong','em'}: continue
+                match = re.search(r'\b'+re.escape(anchor)+r'\b',str(node),re.I)
+                if not match: continue
+                element = soup.new_tag('a',href=link['url'])
+                element.string = match.group()
+                node.replace_with(NavigableString(str(node)[:match.start()]), element, NavigableString(str(node)[match.end():]))
+                break
+        return str(soup)
 
     def _checks(self, *, title: str, html: str, text: str, metadata: dict, links: list[dict], image_alt: str) -> list[dict]:
         return [
@@ -100,7 +111,7 @@ class GrowthSeoGeoService:
             {"code": "internal_links", "label": "Liens internes verifies", "passed": len(links) >= 1, "severity": "error"},
             {"code": "image_alt", "label": "Texte alternatif image", "passed": bool(image_alt.strip()), "severity": "warning"},
             {"code": "json_ld", "label": "Donnees structurees Article", "passed": metadata["json_ld"]["headline"] != "", "severity": "error"},
-            {"code": "geo", "label": "Passages structurables IA", "passed": len(text) >= 900 and bool(re.search(r"\\b(comment|pourquoi|methode|points?|etapes?)\\b", text, re.I)), "severity": "warning"},
+            {"code": "geo", "label": "Passages structurables IA", "passed": len(text) >= 900 and bool(re.search(r"\b(comment|pourquoi|methode|points?|etapes?|how|why|steps?|como|por que|pasos?)\b", text, re.I)), "severity": "warning"},
             {"code": "canonical", "label": "Canonical valide", "passed": urlparse(metadata["canonical"]).scheme == "https", "severity": "error"},
         ]
 
@@ -119,7 +130,7 @@ class GrowthSeoGeoService:
 
     def _canonical_url(self, *, channel: str, locale: str, slug: str) -> str:
         if channel == "mapsi_site":
-            return f"https://mapsi.fr/fr/actualites/{slug}"
+            return f"https://mapsi.fr/actualites/{slug}"
         prefix = {"fr-FR": "/ressources", "en-US": "/en/resources", "es-ES": "/es/recursos"}.get(locale, "/ressources")
         return f"https://oling.fr{prefix}/{slug}"
 

@@ -5,11 +5,13 @@ You receive:
 - one first-draft article already grounded in the allowed evidence
 
 Your job is not to change the factual basis.
-Your job is to rewrite the draft into a publication-ready French article with a clearly higher editorial standard.
+Your job is to rewrite the draft into a publication-ready article in editorial_context.locale with a clearly higher editorial standard.
 
 Mandatory rules:
 - Preserve factual discipline: no invented client, proof point, number, certification, feature, date, result, quote, or commitment.
-- Keep every MAPSI or OLING specific claim anchored in the allowed `source_ids`.
+- Keep every claim anchored in exact source_ids from editorial_context.sources; verify that each source supports the claim, not just that its identifier exists.
+- Never set verified=true without supporting evidence. Remove or cautiously reformulate unsupported assertions instead.
+- Repair empty or unknown source_ids only when an actual supplied source supports that exact claim; never fill identifiers arbitrarily.
 - Do not remove valid facts, but improve their order, rhythm, framing, and readability.
 - Strengthen the opening. The first lines must create interest immediately without clickbait.
 - Improve progression. The article must feel intentional from beginning to end.

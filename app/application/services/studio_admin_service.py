@@ -868,6 +868,7 @@ class StudioAdminService:
             desired_title=desired_title,
             length_directive=length_directive,
             angle_directive=angle_directive,
+            targeted_repair=True,
         )
         campaign = self.campaign_service.get_campaign(asset.campaign_run_id)
         return self._asset_summary(campaign, asset)
@@ -1321,6 +1322,12 @@ class StudioAdminService:
         quality_blocking = quality.get("passed") is False or bool(blocking_issues)
         body = (asset.content_html or asset.body or asset.content_text).strip()
         reasons: list[str] = []
+        session = getattr(self.review_portal_service.campaign_repository, 'session', None)
+        if session is not None:
+            from app.infrastructure.repositories.simple_generation_jobs import SimpleGenerationJobRepository
+            job = SimpleGenerationJobRepository(session).latest_for_campaign(campaign.id)
+            if job and job.status in {'PENDING', 'RUNNING'} and (job.parameters or {}).get('asset_id') == asset.id:
+                reasons.append("An editorial operation is running for this article.")
         if asset.status is not AssetStatus.APPROVED:
             reasons.append("Asset is not approved.")
         if not asset.approved_content_hash or asset.content_hash != asset.approved_content_hash:

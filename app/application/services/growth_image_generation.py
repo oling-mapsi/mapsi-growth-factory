@@ -28,18 +28,23 @@ class GrowthImageGenerationService:
         self.project_root = project_root
         self.settings = get_settings()
 
-    def generate(self, *, channel: str, title: str, content_text: str, visual_brief: str = "") -> GrowthImageResult:
+    def generate(self, *, channel: str, title: str, content_text: str, visual_brief: str = "", locale: str = 'fr-FR') -> GrowthImageResult:
         prompt = self._prompt(channel=channel, title=title, content_text=content_text, visual_brief=visual_brief)
         started = time.perf_counter()
         model = self.settings.growth_image_model
         try:
             payload = self._call_openai(prompt, model)
-        except httpx.HTTPStatusError:
+        except httpx.HTTPStatusError as exc:
+            try:
+                code = exc.response.json().get("error", {}).get("code")
+            except (ValueError, AttributeError):
+                code = None
+            if exc.response.status_code not in {400, 404} or code not in {"model_not_found", "unsupported_model"}:
+                raise
             payload = self._call_openai(prompt, self.settings.growth_image_fallback_model)
             model = self.settings.growth_image_fallback_model
         if not payload.get("data"):
-            payload = self._call_openai(prompt, self.settings.growth_image_fallback_model)
-            model = self.settings.growth_image_fallback_model
+            raise ValueError("Image provider returned no image; no automatic paid retry was attempted.")
         image = payload["data"][0]
         raw = base64.b64decode(image["b64_json"])
         output_format = str(payload.get("output_format") or "png")
@@ -52,7 +57,7 @@ class GrowthImageGenerationService:
         return GrowthImageResult(
             model=model,
             prompt=prompt,
-            alt_text=self._alt_text(channel=channel, title=title),
+            alt_text=self._alt_text(channel=channel, title=title, locale=locale),
             storage_path=str(path.relative_to(self.project_root)),
             data_url=f"data:image/{output_format};base64,{image['b64_json']}",
             output_format=output_format,
@@ -97,6 +102,7 @@ class GrowthImageGenerationService:
             ]
         )
 
-    def _alt_text(self, *, channel: str, title: str) -> str:
+    def _alt_text(self, *, channel: str, title: str, locale: str = 'fr-FR') -> str:
         site = "MAPSI" if channel == "mapsi_site" else "OLING"
-        return f"Illustration {site} pour l'article : {title[:120]}"
+        prefix = {'en-US':f'Editorial illustration {site}: ', 'es-ES':f'Ilustracion editorial {site}: '}.get(locale,f"Illustration {site} pour l'article : ")
+        return prefix + title[:120]

@@ -4,8 +4,8 @@ from html.parser import HTMLParser
 
 
 class HtmlSanitizer(HTMLParser):
-    ALLOWED_TAGS = {"p", "br", "strong", "em", "b", "i", "u", "ul", "ol", "li", "a", "h1", "h2", "h3", "blockquote"}
-    ALLOWED_ATTRS = {"a": {"href", "title", "target", "rel"}}
+    ALLOWED_TAGS = {"p", "br", "strong", "em", "b", "i", "u", "ul", "ol", "li", "a", "h1", "h2", "h3", "blockquote", "figure", "figcaption", "img"}
+    ALLOWED_ATTRS = {"a": {"href", "title", "target", "rel"}, "img": {"src", "alt", "loading"}}
     BLOCKED_TAGS = {"script", "style", "iframe", "object", "embed"}
     BLOCKED_PROTOCOLS = ("javascript:", "data:", "vbscript:")
 
@@ -27,7 +27,7 @@ class HtmlSanitizer(HTMLParser):
             value = value or ""
             if name.startswith("on") or name not in self.ALLOWED_ATTRS.get(tag, set()):
                 continue
-            if name == "href" and self._has_blocked_protocol(value):
+            if name in {"href", "src"} and self._has_blocked_protocol(value):
                 continue
             if tag == "a" and name == "target" and value != "_blank":
                 continue

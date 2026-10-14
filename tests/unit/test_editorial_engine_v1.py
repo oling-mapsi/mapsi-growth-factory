@@ -20,6 +20,8 @@ class RewriteFailingBackend(FakeStructuredAgentBackend):
 
 
 def _seed_recent_product_change(session, *, collected_at: datetime | None = None, summary: str = "Export du tableau utilisateur") -> None:
+    from tests.support_sources import ensure_repository_source
+    ensure_repository_source(session,'source-1','oling-mapsi/mapsi-v6')
     session.add(
         ProductChangeModel(
             id="pc-1",
@@ -199,6 +201,9 @@ def test_generate_blocks_source_insufficient(session) -> None:
 
 
 def test_similarity_checks_against_existing_article_assets(session) -> None:
+    from app.domain.entities import CampaignRun
+    from app.infrastructure.repositories.campaigns import SqlAlchemyCampaignRepository
+    SqlAlchemyCampaignRepository(session).add(CampaignRun(id='campaign-1',name='Synthetic history',campaign_type='MAPSI_MARKETING'))
     _seed_recent_product_change(session)
     session.add(
         ContentAssetModel(
