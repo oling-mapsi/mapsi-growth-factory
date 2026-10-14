@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import UTC, datetime, timedelta
 
 from app.application.ports.connectors import PublisherPort
 from app.application.services.editorial_engine_v1 import build_editorial_generation_service
@@ -243,6 +244,39 @@ def test_failed_simple_generation_can_be_resumed_without_duplicate_job(session) 
     service.generate_campaign(campaign.id)
 
     assert session.query(SimpleGenerationJobModel).count() == 1
+    resumed = jobs.latest_for_campaign(campaign.id)
+    assert resumed.id == job.id
+    assert resumed.status == "PENDING"
+
+
+def test_stale_running_simple_generation_can_be_resumed(session) -> None:
+    repository = SqlAlchemyCampaignRepository(session)
+    jobs = SimpleGenerationJobRepository(session)
+    service = SimpleCampaignService(
+        repository=repository,
+        publisher=TrackingPublisher(),
+        audit_log=SqlAlchemyAuditLogRepository(session),
+        task_queue=InMemoryTaskQueue(),
+        project_root=Path(__file__).resolve().parents[2],
+        editorial_service=build_editorial_generation_service(session, force_mode="simulated"),
+        knowledge_repository=KnowledgeRepository(session, root=Path(__file__).resolve().parents[2] / "knowledge"),
+        generation_jobs=jobs,
+    )
+    campaign = service.create_campaign(
+        CreateSimpleCampaignCommand(
+            name="Stale",
+            campaign_type="OLING",
+            theme="ERP",
+            selected_channels=["oling_site"],
+        )
+    )
+    service.generate_campaign(campaign.id)
+    job = jobs.claim_next()
+    job.updated_at = datetime.now(UTC) - timedelta(minutes=11)
+    session.commit()
+
+    service.generate_campaign(campaign.id)
+
     resumed = jobs.latest_for_campaign(campaign.id)
     assert resumed.id == job.id
     assert resumed.status == "PENDING"

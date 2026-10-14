@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -23,9 +23,18 @@ class SimpleGenerationJobRepository:
             .first()
         )
 
-    def ensure_pending(self, campaign_id: str) -> SimpleGenerationJobModel:
+    def ensure_pending(self, campaign_id: str, *, stale_after_seconds: int = 600) -> SimpleGenerationJobModel:
         latest = self.latest_for_campaign(campaign_id)
         now = datetime.now(UTC)
+        if latest and latest.status == "RUNNING" and self._is_stale(latest, now, stale_after_seconds):
+            latest.status = "PENDING"
+            latest.stage = "WAITING"
+            latest.error_type = "StaleGenerationJob"
+            latest.error_message = "Previous generation worker run became stale and was requeued."
+            latest.updated_at = now
+            self.session.commit()
+            self.session.refresh(latest)
+            return latest
         if latest and latest.status in ACTIVE_STATUSES:
             return latest
         if latest and latest.status == "FAILED":
@@ -52,6 +61,14 @@ class SimpleGenerationJobRepository:
         self.session.commit()
         self.session.refresh(job)
         return job
+
+    def _is_stale(self, job: SimpleGenerationJobModel, now: datetime, stale_after_seconds: int) -> bool:
+        updated_at = job.updated_at
+        if updated_at is None:
+            return True
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=UTC)
+        return updated_at < now - timedelta(seconds=stale_after_seconds)
 
     def claim_next(self) -> SimpleGenerationJobModel | None:
         job = (
