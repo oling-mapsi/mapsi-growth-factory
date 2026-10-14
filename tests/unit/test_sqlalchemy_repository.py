@@ -4,6 +4,7 @@ from app.domain.entities import AudienceSegment, CampaignRun, ContentAsset, Edit
 from app.domain.enums import AssetStatus, CampaignStatus
 from app.infrastructure.db.models import CampaignRunModel, ContentAssetModel
 from app.infrastructure.repositories.campaigns import SqlAlchemyCampaignRepository
+from app.infrastructure.repositories.editorial_pipeline import EditorialPipelineRepository
 
 
 def test_sqlalchemy_repository_persists_nested_aggregates(session) -> None:
@@ -103,3 +104,61 @@ def test_repository_backfills_historical_asset_columns(session) -> None:
     assert asset.source_evidence_ids == ["e1"]
     assert asset.content_version == 3
     assert asset.approved_content_hash == ""
+
+
+def test_editorial_history_uses_lightweight_ordered_query(session) -> None:
+    now = datetime.now(UTC)
+    campaign = CampaignRunModel(
+        id="history-campaign",
+        name="History",
+        objective="History",
+        status=CampaignStatus.APPROVED.value,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(campaign)
+    large_image = "data:image/png;base64," + ("a" * 50000)
+    for index in range(25):
+        session.add(
+            ContentAssetModel(
+                id=f"history-asset-{index:02d}",
+                campaign_run_id=campaign.id,
+                asset_type="oling_news_article",
+                channel="oling",
+                locale="fr-FR",
+                title=f"Article {index:02d}",
+                subject="",
+                body="<p>" + ("large html " * 200) + "</p>",
+                content_html="<p>" + ("large html " * 200) + "</p>",
+                content_text="large text " * 200,
+                excerpt=f"Excerpt {index:02d}",
+                call_to_action="",
+                target_url="",
+                evidence_ids=[],
+                source_evidence_ids=[],
+                audience_segment_id="oling_practice",
+                status=AssetStatus.APPROVED.value,
+                content_version=1,
+                content_hash=f"hash-{index}",
+                approved_content_hash="",
+                approved_by="",
+                approved_at=None,
+                scheduled_at=None,
+                published_at=None,
+                external_publication_id="",
+                external_publication_url="",
+                last_error="",
+                retry_count=0,
+                results={"editorial_article": {"slug": f"article-{index:02d}"}, "image": {"data_url": large_image}},
+                revision=1,
+                created_at=now.replace(microsecond=index),
+            )
+        )
+    session.commit()
+
+    history = EditorialPipelineRepository(session).list_recent_article_history(limit=20)
+
+    assert len(history) == 20
+    assert history[0]["title"] == "Article 24"
+    assert history[-1]["title"] == "Article 05"
+    assert history[0]["slug"] == "article-24"

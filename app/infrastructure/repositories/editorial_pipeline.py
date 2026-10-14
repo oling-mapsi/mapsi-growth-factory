@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain.entities import SourceEvidence
@@ -80,13 +81,34 @@ class EditorialPipelineRepository:
         ]
 
     def list_recent_article_history(self, limit: int = 20) -> list[dict]:
-        rows = (
-            self.session.query(ContentAssetModel)
-            .filter(ContentAssetModel.asset_type.in_(("oling_news_article", "mapsi_news_article", "website_article")))
-            .order_by(ContentAssetModel.created_at.desc())
-            .limit(limit)
+        article_types = ("oling_news_article", "mapsi_news_article", "website_article")
+        id_rows = (
+            self.session.execute(
+                select(ContentAssetModel.id)
+                .filter(ContentAssetModel.asset_type.in_(article_types))
+                .order_by(ContentAssetModel.created_at.desc(), ContentAssetModel.id.desc())
+                .limit(limit)
+            )
+            .scalars()
             .all()
         )
+        if not id_rows:
+            return []
+
+        rows = (
+            self.session.query(
+                ContentAssetModel.id,
+                ContentAssetModel.title,
+                ContentAssetModel.audience_segment_id,
+                ContentAssetModel.results,
+                ContentAssetModel.excerpt,
+                ContentAssetModel.created_at,
+            )
+            .filter(ContentAssetModel.id.in_(id_rows))
+            .all()
+        )
+        by_id = {row.id: row for row in rows}
+        ordered_rows = [by_id[item_id] for item_id in id_rows if item_id in by_id]
         return [
             {
                 "topic": row.title,
@@ -97,8 +119,16 @@ class EditorialPipelineRepository:
                 "excerpt": row.excerpt or "",
                 "created_at": row.created_at,
             }
-            for row in rows
+            for row in ordered_rows
         ]
+
+    def list_recent_article_history_legacy_query_for_diagnostics(self, limit: int = 20):
+        return (
+            self.session.query(ContentAssetModel)
+            .filter(ContentAssetModel.asset_type.in_(("oling_news_article", "mapsi_news_article", "website_article")))
+            .order_by(ContentAssetModel.created_at.desc())
+            .limit(limit)
+        )
 
     def append_theme_history(self, topic: str, objective: str, audience_segment_id: str) -> None:
         self.session.add(

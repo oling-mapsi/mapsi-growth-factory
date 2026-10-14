@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse, Response
 
 from app.application.services.simple_campaign_service import (
     ApproveSimpleAssetCommand,
@@ -38,7 +39,16 @@ def _to_http_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
-def _response(service: SimpleCampaignService, campaign) -> SimpleCampaignResponse:
+def _image_payload(item, service: SimpleCampaignService, *, include_data_url: bool) -> dict:
+    image = dict((item.results or {}).get("image") or {})
+    if image:
+        image["image_url"] = f"/studio-simple/assets/{item.id}/image"
+        if not include_data_url:
+            image.pop("data_url", None)
+    return image
+
+
+def _response(service: SimpleCampaignService, campaign, *, include_image_data: bool = True) -> SimpleCampaignResponse:
     return SimpleCampaignResponse(
         id=campaign.id,
         name=campaign.name,
@@ -60,7 +70,7 @@ def _response(service: SimpleCampaignService, campaign) -> SimpleCampaignRespons
                 excerpt=item.excerpt,
                 call_to_action=item.call_to_action,
                 illustration_suggestion=str((item.results or {}).get("illustration_suggestion", "")),
-                image=dict((item.results or {}).get("image") or {}),
+                image=_image_payload(item, service, include_data_url=include_image_data),
                 seo_geo=dict((item.results or {}).get("seo_geo") or {}),
                 status=service.simple_asset_status(item),
                 version=item.content_version,
@@ -112,7 +122,7 @@ def create_campaign(
 
 @router.get("/campaigns", response_model=list[SimpleCampaignResponse], dependencies=[Depends(require_studio_admin_permission(GROWTH_VIEW))])
 def list_campaigns(service: SimpleCampaignService = Depends(get_simple_campaign_service)) -> list[SimpleCampaignResponse]:
-    return [_response(service, campaign) for campaign in service.list_campaigns()]
+    return [_response(service, campaign, include_image_data=False) for campaign in service.list_campaigns()]
 
 
 @router.get("/campaigns/{campaign_id}", response_model=SimpleCampaignResponse, dependencies=[Depends(require_studio_admin_permission(GROWTH_VIEW))])
@@ -121,6 +131,23 @@ def get_campaign(campaign_id: str, service: SimpleCampaignService = Depends(get_
         return _response(service, service.get_campaign(campaign_id))
     except DomainError as exc:
         raise _to_http_error(exc) from exc
+
+
+@router.get("/assets/{asset_id}/image", dependencies=[Depends(require_studio_admin_permission(GROWTH_VIEW))])
+def get_asset_image(asset_id: str, service: SimpleCampaignService = Depends(get_simple_campaign_service)):
+    try:
+        path, media_type, legacy_data_url = service.get_asset_image_reference(asset_id)
+    except DomainError as exc:
+        raise _to_http_error(exc) from exc
+    if path is not None and path.is_file():
+        return FileResponse(path, media_type=media_type)
+    if legacy_data_url.startswith("data:image/") and ";base64," in legacy_data_url:
+        header, payload = legacy_data_url.split(",", 1)
+        media_type = header.removeprefix("data:").split(";", 1)[0] or "image/png"
+        import base64
+
+        return Response(content=base64.b64decode(payload), media_type=media_type)
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Image not found.")
 
 
 @router.post("/campaigns/{campaign_id}/generate", response_model=SimpleCampaignResponse)

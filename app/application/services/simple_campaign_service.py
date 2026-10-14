@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 import re
+from mimetypes import guess_type
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from app.application.models.editorial_v1 import (
@@ -224,7 +225,7 @@ class SimpleCampaignService:
             "prompt": result.prompt,
             "alt_text": result.alt_text,
             "storage_path": result.storage_path,
-            "data_url": result.data_url,
+            "image_url": f"/studio-simple/assets/{asset.id}/image",
             "output_format": result.output_format,
             "duration_ms": result.duration_ms,
             "tokens": result.tokens,
@@ -240,6 +241,22 @@ class SimpleCampaignService:
             result="SUCCESS",
         )
         return saved
+
+    def get_asset_image_reference(self, asset_id: str) -> tuple[Path | None, str, str]:
+        for campaign in self.repository.list():
+            for asset in campaign.content_assets:
+                if asset.id != asset_id:
+                    continue
+                image = dict((asset.results or {}).get("image") or {})
+                storage_path = str(image.get("storage_path") or "")
+                if storage_path:
+                    resolved = (self.project_root / storage_path).resolve()
+                    root = self.project_root.resolve()
+                    if root == resolved or root in resolved.parents:
+                        media_type = str(guess_type(str(resolved))[0] or "image/png")
+                        return resolved, media_type, str(image.get("alt_text") or "")
+                return None, "", str(image.get("data_url") or "")
+        raise CampaignNotFoundError(f"Asset {asset_id} not found.")
 
     def prepare_asset_seo_geo(self, campaign_id: str, asset_id: str, expected_version: int | None = None) -> CampaignRun:
         campaign = self.get_campaign(campaign_id)
