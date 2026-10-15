@@ -74,6 +74,46 @@ def test_legacy_workflow_remains_strict():
     with pytest.raises(ApprovalPrerequisiteError):campaign.approve_asset(asset.id,'','admin',confirm_editorial_review=True)
 
 
+@pytest.mark.parametrize('text',[
+    'El encuadre hace explícitos los objetivos, las responsabilidades y los compromisos del proyecto, pero no garantiza una implantación sin desviaciones.',
+    'Project framing does not guarantee successful implementation.',
+    'Le cadrage ne garantit pas une mise en oeuvre sans ecart.',
+    'Le cadrage est utile sans garantie de succes.',
+])
+def test_negative_guarantee_disclaimers_remain_human_reviewable(text):
+    campaign,asset,_=fixture_campaign()
+    asset.locale='es-ES'
+    claim=asset.results['editorial_article']['claims'][0]
+    claim['text']=text
+    asset.results['editorial_article']['claims']=[deepcopy(claim) for _ in range(7)]
+    asset.results['editorial_quality']['issues']*=7
+    original=deepcopy(asset.results)
+    state=editorial_readiness(asset)
+    assert state['human_review_pending'] and len(state['editorial_warnings'])==7
+    assert not state['critical_issues']
+    campaign.approve_asset(asset.id,'Explicit human confirmation','admin',confirm_editorial_review=True)
+    assert asset.results['editorial_quality']==original['editorial_quality']
+    assert asset.results['editorial_article']==original['editorial_article']
+    assert asset.results['human_editorial_acceptance']['locale']=='es-ES'
+    campaign.publish(Publication(content_asset_id=asset.id,channel='oling',external_reference='isolated-es'))
+    assert asset.status is AssetStatus.PUBLISHED
+
+
+@pytest.mark.parametrize('text',[
+    'El proyecto garantiza una implantación sin desviaciones.',
+    'El encuadre no garantiza el alcance, pero garantiza una implantación sin desviaciones.',
+    'No garantiza el alcance, pero mejora los ingresos un 50%.',
+    'The process does not guarantee delivery, but guarantees success.',
+    'Le cadrage ne garantit pas le delai mais garantit le succes.',
+    'This is not medical advice.',
+])
+def test_negative_word_does_not_hide_other_sensitive_or_positive_assertions(text):
+    campaign,asset,_=fixture_campaign()
+    asset.results['editorial_article']['claims'][0]['text']=text
+    assert not editorial_readiness(asset)['human_review_pending']
+    with pytest.raises(ApprovalPrerequisiteError):campaign.approve_asset(asset.id,'','admin',confirm_editorial_review=True)
+
+
 def test_simple_review_and_approval_bind_human_acceptance_without_rewriting(session):
     from app.application.services.simple_campaign_service import SimpleCampaignService, ReviewSimpleAssetCommand, ApproveSimpleAssetCommand
     from app.infrastructure.repositories.campaigns import SqlAlchemyCampaignRepository

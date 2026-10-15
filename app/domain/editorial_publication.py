@@ -12,6 +12,19 @@ _MANUAL = {'manual_content_changed', 'editorial_content_mismatch'}
 _CRITICAL = {'unauthorized_client_reference', 'unsafe_html', 'secret_or_email_detected', 'sensitive_fact', 'dangerous_content'}
 
 
+def _has_sensitive_claim(text: str) -> bool:
+    for match in _SENSITIVE.finditer(text):
+        term = match.group().casefold()
+        if term.startswith(('guarantee', 'garanti', 'garantiz')):
+            prefix, suffix = text[:match.start()], text[match.end():]
+            negated = re.search(r'\b(?:no|not|never|without|sans|sin)\s+$', prefix, re.I)
+            french_negation = re.search(r'\bne\s+$', prefix, re.I) and re.match(r'\s+(?:pas|jamais|aucun|aucune)\b', suffix, re.I)
+            if negated or french_negation:
+                continue
+        return True
+    return False
+
+
 def editorial_readiness(asset) -> dict:
     quality = dict((asset.results or {}).get('editorial_quality') or {})
     claims = ((asset.results or {}).get('editorial_article') or {}).get('claims') or []
@@ -20,7 +33,7 @@ def editorial_readiness(asset) -> dict:
     missing_issues = [issue for issue in issues if issue.get('code') == 'claim_without_source']
     can_accept_missing = bool(missing) and len(missing) == len(missing_issues) and all(
         claim.get('claim_type') in {'generic_guidance', 'editorial_positioning'}
-        and bool(str(claim.get('text', '')).strip()) and not _SENSITIVE.search(claim['text'])
+        and bool(str(claim.get('text', '')).strip()) and not _has_sensitive_claim(claim['text'])
         and not claim.get('critical') and not claim.get('sensitive') for claim in missing
     )
     warnings, blockers = [], []
