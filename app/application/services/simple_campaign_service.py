@@ -251,11 +251,38 @@ class SimpleCampaignService:
             reference.pop('data_url', None)
             job.parameters = {**parameters, 'generated_images': {**parameters.get('generated_images', {}), asset_id: reference}} if completing_articles else {**parameters, 'generated_image': reference}
             self.repository.session.commit()
+        return self._attach_asset_image(campaign_id, asset_id, command.expected_version, result)
+
+    def reuse_asset_image(self, campaign_id: str, asset_id: str, source_asset_id: str, expected_version: int, actor: str) -> CampaignRun:
+        campaign = self.get_campaign(campaign_id)
+        self._assert_simple_campaign(campaign)
+        asset = self._find_asset(campaign, asset_id)
+        source = self._find_asset(campaign, source_asset_id)
+        asset.assert_expected_version(expected_version)
+        if asset.channel != 'oling' or source.channel != 'oling' or source.locale != 'fr-FR' or asset.locale not in {'en-US', 'es-ES'}:
+            raise InvalidStateTransitionError('Only the French illustration of the same OLING campaign can be reused.')
+        if asset.status in {AssetStatus.PUBLISHED, AssetStatus.PUBLISHING}:
+            raise InvalidStateTransitionError('Published articles cannot be changed by illustration reuse.')
+        path, _, _ = self.get_asset_image_reference(source.id)
+        if path is None or not path.is_file():
+            raise InvalidStateTransitionError('The French illustration is unavailable.')
+        from app.application.services.growth_image_generation import GrowthImageResult
+        image = dict((source.results or {}).get('image') or {})
+        prefix = 'Editorial illustration: ' if asset.locale == 'en-US' else 'Ilustración editorial: '
+        result = GrowthImageResult(model=image.get('model', ''), prompt=image.get('prompt', ''), alt_text=prefix+asset.title,
+            storage_path=image['storage_path'], data_url='', output_format=image.get('output_format', 'png'), duration_ms=0, tokens={})
+        saved = self._attach_asset_image(campaign_id, asset_id, expected_version, result, reused=True)
+        self.audit_log.append(saved.id, 'simple_campaign.asset_image_reused', {'asset_id':asset_id,'source_asset_id':source_asset_id,'version':expected_version+1},
+            actor_source=actor, previous_state={}, new_state={}, result='SUCCESS')
+        return saved
+
+    def _attach_asset_image(self, campaign_id: str, asset_id: str, expected_version: int | None, result, *, reused: bool = False) -> CampaignRun:
+        campaign = self.get_campaign(campaign_id)
         self._refresh_progress_state(campaign)
         campaign = self.get_campaign(campaign_id)
         asset = self._find_asset(campaign, asset_id)
-        if command.expected_version is not None:
-            asset.assert_expected_version(command.expected_version)
+        if expected_version is not None:
+            asset.assert_expected_version(expected_version)
         from app.infrastructure.repositories.asset_revisions import AssetRevisionRepository
         if getattr(self.repository, "session", None) is not None:
             AssetRevisionRepository(self.repository.session).snapshot_asset(asset)
@@ -275,7 +302,7 @@ class SimpleCampaignService:
         saved = self.repository.save(campaign)
         self.audit_log.append(
             saved.id,
-            "simple_campaign.asset_image_generated",
+            "simple_campaign.asset_image_attached" if reused else "simple_campaign.asset_image_generated",
             {"asset_id": asset_id, "channel": asset.channel, "model": result.model, "storage_path": result.storage_path},
             actor_source="studio-simple",
             previous_state={},
@@ -687,7 +714,9 @@ class SimpleCampaignService:
         asset = self._find_asset(campaign, asset_id)
         if command.expected_version is not None:
             asset.assert_expected_version(command.expected_version)
-        if asset.status not in {AssetStatus.READY_FOR_REVIEW, AssetStatus.CHANGES_REQUESTED, AssetStatus.DRAFT, AssetStatus.REVIEWED}:
+        from app.domain.editorial_publication import editorial_readiness
+        reviewable_failure = asset.status is AssetStatus.QUALITY_FAILED and editorial_readiness(asset)['human_review_pending']
+        if not reviewable_failure and asset.status not in {AssetStatus.READY_FOR_REVIEW, AssetStatus.CHANGES_REQUESTED, AssetStatus.DRAFT, AssetStatus.REVIEWED}:
             raise InvalidStateTransitionError(f"Asset {asset.id} cannot be reviewed from {asset.status.value}.")
         asset.ensure_content_hash()
         asset.status = AssetStatus.REVIEWED
@@ -741,16 +770,19 @@ class SimpleCampaignService:
             asset.results = {**asset.results, 'editorial_article': article.model_dump(mode='json'), 'editorial_quality': quality,
                 'human_editorial_review': {'actor': command.actor, 'version': asset.content_version, 'content_hash': asset.content_hash},
                 'editorial_execution': {**asset.results.get('editorial_execution', {}), 'output_hash': sha256_hexdigest(article.model_dump_json())}}
-        if quality and not quality.get("passed", False):
+        from app.domain.editorial_publication import editorial_readiness
+        state = editorial_readiness(asset)
+        if state['quality_blocking'] and not (command.confirm_editorial_review and not state['critical_issues']):
             raise InvalidStateTransitionError("Asset has blocking editorial quality issues.")
-        if blocking_issues:
-            raise InvalidStateTransitionError("Asset has blocking editorial quality issues.")
-        campaign.approve_asset(asset_id, command.comment, command.actor)
+        if command.confirm_editorial_review and command.expected_version is None:
+            raise InvalidStateTransitionError('An exact version is required for human confirmation.')
+        campaign.approve_asset(asset_id, command.comment, command.actor, confirm_editorial_review=command.confirm_editorial_review)
         saved = self.repository.save(campaign)
         self.audit_log.append(
             saved.id,
             "simple_campaign.asset_approved",
-            {"asset_id": asset_id, "channel": asset.channel, "version": asset.content_version, "approved_by": command.actor},
+            {"asset_id": asset_id, "channel": asset.channel, "version": asset.content_version, "approved_by": command.actor,
+             "approved_content_hash": asset.approved_content_hash, "human_editorial_acceptance": (asset.results or {}).get('human_editorial_acceptance')},
             actor_source=command.actor,
             previous_state={},
             new_state={"status": saved.status.value},

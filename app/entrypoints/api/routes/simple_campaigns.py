@@ -15,6 +15,7 @@ from app.application.services.simple_campaign_service import (
 )
 from app.core.security import GROWTH_APPROVE, GROWTH_PUBLISH, GROWTH_REVIEW, GROWTH_VIEW, StudioAdminPrincipal, require_studio_admin_permission
 from app.domain.errors import CampaignNotFoundError, CampaignPublicationForbiddenError, DomainError, InvalidStateTransitionError, OptimisticLockError
+from app.domain.editorial_publication import editorial_readiness
 from app.entrypoints.api.dependencies import get_simple_campaign_service
 from app.entrypoints.api.simple_campaign_schemas import (
     OlingThemeCatalogResponse,
@@ -89,7 +90,7 @@ def _response(service: SimpleCampaignService, campaign, *, include_image_data: b
                 image=_image_payload(item, service, include_data_url=include_image_data),
                 seo_geo=dict((item.results or {}).get("seo_geo") or {}),
                 editorial_quality=dict((item.results or {}).get("editorial_quality") or {}),
-                quality_blocking=not bool(dict((item.results or {}).get("editorial_quality") or {}).get("passed", True)),
+                quality_blocking=editorial_readiness(item)['quality_blocking'] if campaign.workflow_kind.upper() == 'SIMPLE' else not bool(dict((item.results or {}).get("editorial_quality") or {}).get("passed", True)),
                 sources=[{key:source.get(key,'') for key in ('source_id','label','summary')} for source in ((item.results or {}).get('builder_context') or {}).get('sources',[]) if isinstance(source,dict)],
                 claims=list(((item.results or {}).get('editorial_article') or {}).get('claims') or []),
                 status=service.simple_asset_status(item),
@@ -276,6 +277,8 @@ def generate_asset_image(
     if payload.expected_version is None:
         raise HTTPException(status_code=422, detail="expected_version is required for illustration generation.")
     try:
+        if payload.source_asset_id:
+            return _response(service, service.reuse_asset_image(campaign_id, asset_id, payload.source_asset_id, payload.expected_version, principal.actor_id))
         return _response(
             service,
             service.enqueue_asset_image(

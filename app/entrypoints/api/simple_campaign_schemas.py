@@ -34,6 +34,7 @@ class SimpleAssetDecisionRequest(BaseModel):
 class SimpleAssetImageRequest(BaseModel):
     visual_brief: str = ""
     expected_version: int | None = None
+    source_asset_id: str | None = None
 
 
 class SimpleAssetSeoGeoRequest(BaseModel):

@@ -832,10 +832,14 @@ class CampaignRun:
         self._sync_status_from_assets()
         return decision
 
-    def approve_asset(self, asset_id: str, comment: str, decided_by: str) -> ApprovalDecision:
+    def approve_asset(self, asset_id: str, comment: str, decided_by: str, *, confirm_editorial_review: bool = False) -> ApprovalDecision:
         if not self.source_evidences:
             raise ApprovalPrerequisiteError(f"Campaign {self.id} has no source evidence to approve.")
         asset = self._find_asset(asset_id)
+        asset.ensure_content_hash()
+        if self.workflow_kind.upper() == 'SIMPLE' and confirm_editorial_review:
+            from app.domain.editorial_publication import accept_editorial_warnings
+            accept_editorial_warnings(asset, decided_by)
         self._assert_asset_editorial_quality(asset)
         asset.approve(decided_by)
         decision = ApprovalDecision(
@@ -849,6 +853,11 @@ class CampaignRun:
         return decision
 
     def _assert_asset_editorial_quality(self, asset: ContentAsset) -> None:
+        if self.workflow_kind.upper() == 'SIMPLE':
+            from app.domain.editorial_publication import editorial_readiness
+            if editorial_readiness(asset)['quality_blocking']:
+                raise ApprovalPrerequisiteError(f"Asset {asset.id} has blocking editorial quality issues.")
+            return
         quality = dict((asset.results or {}).get("editorial_quality") or {})
         blocking_issues = [
             item
@@ -918,9 +927,8 @@ class CampaignRun:
                 raise CampaignPublicationForbiddenError('SIMPLE publication requires an exact asset.')
             asset = self._find_asset(publication_asset_id)
             asset.ensure_content_hash()
-            quality = dict((asset.results or {}).get('editorial_quality') or {})
-            blocking = any(isinstance(issue, dict) and issue.get('severity') in {'error', 'blocking'} for issue in quality.get('issues', []))
-            if asset.channel != publication.channel or asset.status not in {AssetStatus.APPROVED, AssetStatus.PUBLISHED} or not asset.approved_content_hash or asset.approved_content_hash != asset.content_hash or (quality and not quality.get('passed')) or blocking:
+            from app.domain.editorial_publication import editorial_readiness
+            if asset.channel != publication.channel or asset.status not in {AssetStatus.APPROVED, AssetStatus.PUBLISHED} or not asset.approved_content_hash or asset.approved_content_hash != asset.content_hash or editorial_readiness(asset)['quality_blocking']:
                 raise CampaignPublicationForbiddenError('SIMPLE publication requires an individually approved, unchanged asset without blocking quality issues.')
         elif self.status not in {CampaignStatus.APPROVED, CampaignStatus.PARTIALLY_PUBLISHED, CampaignStatus.PUBLISHED}:
             raise CampaignPublicationForbiddenError(
