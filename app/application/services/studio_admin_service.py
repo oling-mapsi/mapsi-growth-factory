@@ -1360,12 +1360,9 @@ class StudioAdminService:
         )
         channel_kill_switch = self.channel_state_repository.is_channel_kill_switch_active(asset.channel)
         global_kill_switch = self.channel_state_repository.is_global_kill_switch_active(static_default=self.settings.workflow_kill_switch)
-        quality = dict((asset.results or {}).get("editorial_quality") or {})
-        blocking_issues = [
-            issue for issue in quality.get("issues", [])
-            if isinstance(issue, dict) and str(issue.get("severity", "")).lower() in {"error", "blocking"}
-        ]
-        quality_blocking = quality.get("passed") is False or bool(blocking_issues)
+        from app.domain.editorial_publication import editorial_readiness
+        editorial = editorial_readiness(asset)
+        quality_blocking = editorial['quality_blocking']
         body = (asset.content_html or asset.body or asset.content_text).strip()
         reasons: list[str] = []
         session = getattr(self.review_portal_service.campaign_repository, 'session', None)
@@ -1409,6 +1406,10 @@ class StudioAdminService:
             "approved": asset.status is AssetStatus.APPROVED,
             "hash_matches": bool(asset.approved_content_hash and asset.content_hash == asset.approved_content_hash),
             "quality_blocking": quality_blocking,
+            "human_review_pending": editorial['human_review_pending'],
+            "editorial_warnings": editorial['editorial_warnings'],
+            "warnings_accepted": editorial['warnings_accepted'],
+            "critical_issues": editorial['critical_issues'],
             "public_url": asset.external_publication_url or "",
         }
 
